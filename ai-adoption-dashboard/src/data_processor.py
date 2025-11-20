@@ -17,21 +17,15 @@ class DataProcessor:
             self.debug_log.append("⚠️ No employee file path provided")
 
     def _load_employee_mapping(self, filepath):
-        """Creates a 'Source of Truth' dictionary for Departments."""
         try:
-            # Use utf-8-sig to handle BOM characters often found in Excel CSV exports
             try:
                 df = pd.read_csv(filepath, encoding='utf-8-sig')
             except:
                 df = pd.read_csv(filepath, encoding='latin1')
 
-            # Normalize columns: lowercase, strip whitespace
             df.columns = [c.strip() for c in df.columns]
             
-            # Find Email column (robust search)
             email_col = next((c for c in df.columns if 'email' in c.lower()), None)
-            
-            # Find Department column (Look for Function first, then Dept)
             func_col = next((c for c in df.columns if 'function' in c.lower()), None)
             if not func_col:
                  func_col = next((c for c in df.columns if 'department' in c.lower()), None)
@@ -40,24 +34,16 @@ class DataProcessor:
                 self.debug_log.append(f"❌ Column Missing in Emp File. Found: {df.columns.tolist()}")
                 return
 
-            # Clean data for matching
             df[email_col] = df[email_col].astype(str).str.lower().str.strip()
             df[func_col] = df[func_col].astype(str).str.strip()
             
-            # Create the master dictionary {email: department}
             self.employee_map = dict(zip(df[email_col], df[func_col]))
-            
-            # DEBUG: Log success
             self.debug_log.append(f"✅ Mapped {len(self.employee_map)} employees.")
-            # Show first 3 matches for sanity check
-            sample_keys = list(self.employee_map.keys())[:3]
-            self.debug_log.append(f"Sample Emails in Roster: {sample_keys}")
             
         except Exception as e:
             self.debug_log.append(f"❌ Error processing employee file: {str(e)}")
 
     def _get_empty_schema(self):
-        """Returns an empty DataFrame with the correct columns to prevent KeyErrors."""
         return pd.DataFrame(columns=['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count'])
 
     def process_blueflame(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
@@ -73,24 +59,25 @@ class DataProcessor:
         melted = melted[melted['Count'] > 0]
         melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%y-%b', errors='coerce')
         
-        # Map Metadata
         melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
-        
-        # STRICT MAPPING: Use Map, fallback to 'Unassigned' (Do not use CSV data)
         melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
-        
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
+        
         melted['Tool'] = 'BlueFlame'
-        melted['Feature'] = 'Investment Research' 
+        # --- UPDATED LABEL ---
+        melted['Feature'] = 'BlueFlame Messages' 
         
         return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
 
     def process_openai(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
         records = []
+        
+        # --- UPDATED MAPPING (Original Names) ---
         feature_mapping = {
-            'messages': 'Standard Chat',
-            'tool_messages': 'Advanced Data Analysis', 
-            'gpt_messages': 'Custom GPTs'
+            'messages': 'ChatGPT Messages',      # Main usage
+            'tool_messages': 'Tool Messages',    # Original csv header name
+            'gpt_messages': 'GPT Messages',      # Original csv header name
+            'project_messages': 'Project Messages' # Original csv header name
         }
         
         df.columns = [c.lower() for c in df.columns]
@@ -100,14 +87,11 @@ class DataProcessor:
             if not email or email == 'nan': continue
             
             try:
-                # Handle different date formats
                 date = pd.to_datetime(row.get('period_start'))
             except:
                 continue
                 
             name = row.get('name', email.split('@')[0])
-            
-            # STRICT MAPPING
             dept = self.employee_map.get(email, 'Unassigned')
             
             for col, feature_name in feature_mapping.items():
@@ -158,10 +142,7 @@ class DataProcessor:
             
         result = pd.concat(dfs, ignore_index=True)
         
-        # Final Safety Check: Ensure columns exist even after concat
-        required_cols = ['Name', 'Department', 'Date', 'Tool', 'Count']
-        for col in required_cols:
-            if col not in result.columns:
-                result[col] = None
-                
+        if 'Feature' not in result.columns:
+             result['Feature'] = 'Unknown'
+             
         return result
