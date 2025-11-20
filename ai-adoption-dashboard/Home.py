@@ -27,59 +27,42 @@ st.markdown("""
 # --- Data Loading Logic ---
 @st.cache_data(show_spinner="Processing Data...")
 def load_and_process_data():
-    # 1. Determine Paths (Robustly)
-    # Get the folder where Home.py lives
+    # Determine Paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    # Get the folder ABOVE Home.py (Repo Root)
     repo_root = os.path.dirname(script_dir)
     
-    # Define where to look (Current folder, Parent folder, and 'data' subfolders)
-    search_paths = [
-        script_dir,                     # ai-adoption-dashboard/
-        repo_root,                      # / (Repo Root - Most likely location!)
-        os.path.join(script_dir, "data"), 
-        os.path.join(repo_root, "data")
-    ]
+    search_paths = [script_dir, repo_root, os.path.join(script_dir, "data"), os.path.join(repo_root, "data")]
     
     emp_path = None
     bf_files = []
     openai_files = []
 
-    # 2. Find Files in all search paths
+    # 1. Find Employee File
     for folder in search_paths:
-        # Skip if folder doesn't exist
-        if not os.path.exists(folder):
-            continue
-            
-        # Find Employee File (Stop once found)
-        if not emp_path:
-            found = glob.glob(os.path.join(folder, "Employee Headcount*"))
-            if found: emp_path = found[0]
+        if not os.path.exists(folder): continue
+        found = glob.glob(os.path.join(folder, "Employee Headcount*"))
+        if found: 
+            emp_path = found[0]
+            break
     
-        # Find Usage Files (Collect all)
-        # Case insensitive search for BlueFlame
-        bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")))
-        bf_files.extend(glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
-        
-        # Case insensitive search for OpenAI/ChatGPT
-        openai_files.extend(glob.glob(os.path.join(folder, "*Openai*.csv")))
-        openai_files.extend(glob.glob(os.path.join(folder, "*ChatGPT*.csv")))
+    # 2. Find Usage Files
+    for folder in search_paths:
+        if not os.path.exists(folder): continue
+        bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")) + glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
+        openai_files.extend(glob.glob(os.path.join(folder, "*Openai*.csv")) + glob.glob(os.path.join(folder, "*ChatGPT*.csv")))
     
-    # Deduplicate
     bf_files = list(set(bf_files))
     openai_files = list(set(openai_files))
 
     # 3. Run Processor
-    # Note: We assume src.data_processor is importable. 
-    # If Home.py is in ai-adoption-dashboard, this works fine.
     processor = DataProcessor(emp_path)
     df = processor.get_unified_data(bf_paths=bf_files, openai_paths=openai_files)
     
-    return df, emp_path, bf_files, openai_files, search_paths
+    return df, emp_path, bf_files, openai_files, processor.debug_log
 
 # --- App Logic ---
 try:
-    df, emp_path, bf_files, openai_files, search_paths = load_and_process_data()
+    df, emp_path, bf_files, openai_files, debug_log = load_and_process_data()
 except Exception as e:
     st.error(f"Critical Error during processing: {e}")
     st.stop()
@@ -88,40 +71,46 @@ except Exception as e:
 with st.sidebar:
     st.header("🎛️ Controls")
     
-    # Debug Info (shows exactly where it looked)
-    with st.expander("📂 Data Source Status", expanded=True):
+    # DIAGNOSTICS
+    with st.expander("🔍 Diagnostics (Check this!)", expanded=True):
+        # 1. File Detection
         if emp_path:
             st.success(f"✅ Employees: {os.path.basename(emp_path)}")
         else:
             st.error("❌ Employee File Missing")
-            
-        st.info(f"🔹 BlueFlame Files: {len(bf_files)}")
-        st.info(f"🔹 OpenAI Files: {len(openai_files)}")
         
-        if df.empty:
-            st.warning("⚠️ No unified records created")
-            st.write("Checked folders:")
-            for p in search_paths:
-                st.code(p)
+        # 2. Processor Logs
+        st.write("**Processor Logs:**")
+        for log in debug_log:
+            if "❌" in log: st.error(log)
+            elif "⚠️" in log: st.warning(log)
+            else: st.caption(log)
+            
+        # 3. Match Rate Check
+        if not df.empty:
+            assigned = len(df[df['Department'] != 'Unassigned'])
+            total = len(df)
+            st.write(f"**Match Rate:** {assigned}/{total} records")
+            if assigned == 0:
+                st.error("0% Matching! Check email column names.")
 
     if df.empty:
-        st.warning("No data found. Please check the 'Checked folders' list above.")
+        st.warning("No unified data found.")
         st.stop()
         
     # Filters
     st.divider()
-    # Ensure dates are datetime
     df['Date'] = pd.to_datetime(df['Date'])
+    
     min_date = df['Date'].min()
     max_date = df['Date'].max()
-    
     date_range = st.date_input("Date Range", value=(min_date, max_date))
     
     tools = st.multiselect("Select Tools", df['Tool'].unique(), default=df['Tool'].unique())
     
-    # Handle potentially mixed types in Department
-    dept_list = sorted([str(d) for d in df['Department'].unique()])
-    depts = st.multiselect("Select Departments", dept_list, default=dept_list)
+    # Dept Filter
+    available_depts = sorted([str(d) for d in df['Department'].unique()])
+    depts = st.multiselect("Select Departments", available_depts, default=available_depts)
 
 # Apply Filters
 mask = (
@@ -134,65 +123,43 @@ filtered_df = df[mask]
 
 # --- Main Dashboard ---
 st.title("🚀 Enterprise AI Adoption Dashboard")
-st.markdown("Tracking adoption velocity and engagement across the organization.")
 
 # 1. Top Level Metrics
 col1, col2, col3, col4 = st.columns(4)
 total_users = filtered_df['Email'].nunique()
 total_activities = filtered_df['Count'].sum()
 active_depts = filtered_df['Department'].nunique()
+top_tool = filtered_df.groupby('Tool')['Count'].sum().idxmax() if not filtered_df.empty else "N/A"
 
-# Calculate Top Tool safely
-if not filtered_df.empty:
-    top_tool = filtered_df.groupby('Tool')['Count'].sum().idxmax()
-else:
-    top_tool = "N/A"
-
-# Helper for custom metric card
 def custom_metric(label, value, col):
-    col.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="big-number">{value}</div>
-        </div>
-    """, unsafe_allow_html=True)
+    col.markdown(f"""<div class="metric-card"><div class="metric-label">{label}</div><div class="big-number">{value}</div></div>""", unsafe_allow_html=True)
 
 custom_metric("Active Users", f"{total_users:,}", col1)
 custom_metric("Total Interactions", f"{total_activities:,.0f}", col2)
 custom_metric("Active Departments", active_depts, col3)
 custom_metric("Top Platform", top_tool, col4)
 
-st.write("") # Spacer
+st.write("")
 
 # 2. Adoption Rate & Trends
 c1, c2 = st.columns([2, 1])
 
 with c1:
-    st.subheader("📈 Adoption Trend (Monthly Active Users)")
+    st.subheader("📈 Adoption Trend")
     if not filtered_df.empty:
-        # Aggregate MAU by Month & Tool
         mau_trend = filtered_df.set_index('Date').groupby([pd.Grouper(freq='M'), 'Tool'])['Email'].nunique().reset_index()
-        fig_mau = px.line(mau_trend, x='Date', y='Email', color='Tool', markers=True, 
-                          labels={'Email': 'Active Users', 'Date': 'Month'})
-        fig_mau.update_layout(hovermode="x unified")
+        fig_mau = px.line(mau_trend, x='Date', y='Email', color='Tool', markers=True, labels={'Email': 'Active Users'})
         st.plotly_chart(fig_mau, use_container_width=True)
-    else:
-        st.info("No data to display trends.")
 
 with c2:
     st.subheader("🛠️ Usage Breakdown")
     if not filtered_df.empty:
         feature_mix = filtered_df.groupby('Feature')['Count'].sum().reset_index()
         fig_pie = px.pie(feature_mix, values='Count', names='Feature', hole=0.4)
-        fig_pie.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("No data for breakdown.")
 
 # 3. Leaderboards
 st.divider()
-st.subheader("🏆 Leaderboards")
-
 tab1, tab2 = st.tabs(["👥 Top Users", "🏢 Top Departments"])
 
 with tab1:
@@ -202,12 +169,8 @@ with tab1:
             Tools_Used=('Tool', lambda x: ", ".join(x.unique())),
             Last_Active=('Date', 'max')
         ).sort_values('Total_Interactions', ascending=False).head(25).reset_index()
-        
-        # Add rank
-        user_stats.index = user_stats.index + 1
+        user_stats.index += 1
         st.dataframe(user_stats, use_container_width=True)
-    else:
-        st.write("No data found.")
 
 with tab2:
     if not filtered_df.empty:
@@ -215,8 +178,5 @@ with tab2:
             Active_Users=('Email', 'nunique'),
             Total_Volume=('Count', 'sum')
         ).sort_values('Total_Volume', ascending=False).reset_index()
-        
-        dept_stats.index = dept_stats.index + 1
+        dept_stats.index += 1
         st.dataframe(dept_stats, use_container_width=True)
-    else:
-        st.write("No data found.")
