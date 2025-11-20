@@ -5,9 +5,13 @@ class MetricsEngine:
     def __init__(self, df):
         self.df = df.copy()
         
-    def calculate_roi(self, hourly_rate=100, assumptions=None):
+    def calculate_roi(self, hourly_rate=100, assumptions=None, discount_rate=0.0):
         """
         Calculates time and dollar savings based on feature type.
+        
+        Args:
+            discount_rate (float): 0.0 to 1.0. 
+                                   0.2 means "Remove 20% of value to account for errors/iterations".
         """
         if assumptions is None:
             # Default minutes saved per interaction type
@@ -22,9 +26,14 @@ class MetricsEngine:
                 'Project Messages': 10
             }
             
-        # Map assumptions to the dataframe
-        # Default to 5 mins if feature not found
-        self.df['Minutes_Saved'] = self.df['Feature'].map(assumptions).fillna(5) * self.df['Count']
+        # 1. Map Gross Minutes (Optimistic)
+        raw_minutes = self.df['Feature'].map(assumptions).fillna(5) * self.df['Count']
+        
+        # 2. Apply Discount Factor (The "Reality Check")
+        # If discount is 80% (0.8), we keep 20% (0.2) of the value.
+        efficiency_factor = 1 - discount_rate
+        
+        self.df['Minutes_Saved'] = raw_minutes * efficiency_factor
         self.df['Hours_Saved'] = self.df['Minutes_Saved'] / 60
         self.df['Dollar_Value'] = self.df['Hours_Saved'] * hourly_rate
         
@@ -33,10 +42,7 @@ class MetricsEngine:
     def get_efficiency_quadrant(self):
         """
         Generates data for the "Volume vs. Diversity" scatter plot.
-        Identifies: Power Users vs. Specialists vs. Tourists.
         """
-        # 1. Volume (Total Interactions)
-        # 2. Diversity (Unique Tools/Features used)
         stats = self.df.groupby(['Department']).agg(
             Active_Users=('Email', 'nunique'),
             Total_Volume=('Count', 'sum'),
@@ -44,10 +50,7 @@ class MetricsEngine:
             Tools_Used=('Tool', 'nunique')
         ).reset_index()
         
-        # Calculate "Intensity" (Vol / User)
         stats['Intensity'] = stats['Total_Volume'] / stats['Active_Users']
-        
-        # Calculate Quadrant Medians
         stats['Median_Vol'] = stats['Total_Volume'].median()
         stats['Median_Diversity'] = stats['Unique_Features'].median()
         
@@ -63,8 +66,6 @@ class MetricsEngine:
             Last_Active=('Date', 'max')
         ).reset_index()
 
-        # Logic for Badges
-        # Top 10% = 'Champion', Top 30% = 'Power User', Bottom 30% = 'Explorer'
         p90 = user_stats['Total_Interactions'].quantile(0.90)
         p70 = user_stats['Total_Interactions'].quantile(0.70)
         
