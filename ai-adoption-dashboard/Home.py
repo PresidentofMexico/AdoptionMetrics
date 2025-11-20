@@ -30,7 +30,6 @@ def load_and_process_data():
     # Determine Paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.dirname(script_dir)
-    
     search_paths = [script_dir, repo_root, os.path.join(script_dir, "data"), os.path.join(repo_root, "data")]
     
     emp_path = None
@@ -60,11 +59,20 @@ def load_and_process_data():
     
     return df, emp_path, bf_files, openai_files, processor.debug_log
 
-# --- App Logic ---
+# --- App Logic & Safety Check ---
 try:
     df, emp_path, bf_files, openai_files, debug_log = load_and_process_data()
+    
+    # SELF-HEALING: Check for stale cache
+    if not df.empty and 'Name' not in df.columns:
+        st.cache_data.clear()
+        st.warning("⚠️ Stale data detected. Clearing cache and reloading... Please refresh the page manually if this persists.")
+        st.stop()
+
 except Exception as e:
     st.error(f"Critical Error during processing: {e}")
+    if "Name" in str(e):
+        st.info("💡 Tip: Try clearing the cache (Press 'C')")
     st.stop()
 
 # --- Sidebar Debug & Filters ---
@@ -72,27 +80,20 @@ with st.sidebar:
     st.header("🎛️ Controls")
     
     # DIAGNOSTICS
-    with st.expander("🔍 Diagnostics (Check this!)", expanded=True):
-        # 1. File Detection
+    with st.expander("🔍 Diagnostics", expanded=False):
         if emp_path:
-            st.success(f"✅ Employees: {os.path.basename(emp_path)}")
+            st.success(f"✅ Emp: {os.path.basename(emp_path)}")
         else:
-            st.error("❌ Employee File Missing")
+            st.error("❌ Emp File Missing")
+            
+        st.write(f"**BF Files:** {len(bf_files)}")
+        st.write(f"**OpenAI Files:** {len(openai_files)}")
         
-        # 2. Processor Logs
-        st.write("**Processor Logs:**")
+        st.write("**Logs:**")
         for log in debug_log:
             if "❌" in log: st.error(log)
             elif "⚠️" in log: st.warning(log)
             else: st.caption(log)
-            
-        # 3. Match Rate Check
-        if not df.empty:
-            assigned = len(df[df['Department'] != 'Unassigned'])
-            total = len(df)
-            st.write(f"**Match Rate:** {assigned}/{total} records")
-            if assigned == 0:
-                st.error("0% Matching! Check email column names.")
 
     if df.empty:
         st.warning("No unified data found.")
@@ -104,6 +105,7 @@ with st.sidebar:
     
     min_date = df['Date'].min()
     max_date = df['Date'].max()
+    
     date_range = st.date_input("Date Range", value=(min_date, max_date))
     
     tools = st.multiselect("Select Tools", df['Tool'].unique(), default=df['Tool'].unique())
@@ -129,7 +131,13 @@ col1, col2, col3, col4 = st.columns(4)
 total_users = filtered_df['Email'].nunique()
 total_activities = filtered_df['Count'].sum()
 active_depts = filtered_df['Department'].nunique()
-top_tool = filtered_df.groupby('Tool')['Count'].sum().idxmax() if not filtered_df.empty else "N/A"
+
+# Safely get top tool
+if not filtered_df.empty:
+    tool_counts = filtered_df.groupby('Tool')['Count'].sum()
+    top_tool = tool_counts.idxmax() if not tool_counts.empty else "N/A"
+else:
+    top_tool = "N/A"
 
 def custom_metric(label, value, col):
     col.markdown(f"""<div class="metric-card"><div class="metric-label">{label}</div><div class="big-number">{value}</div></div>""", unsafe_allow_html=True)
@@ -171,6 +179,8 @@ with tab1:
         ).sort_values('Total_Interactions', ascending=False).head(25).reset_index()
         user_stats.index += 1
         st.dataframe(user_stats, use_container_width=True)
+    else:
+        st.info("No data matching filters")
 
 with tab2:
     if not filtered_df.empty:
@@ -180,3 +190,5 @@ with tab2:
         ).sort_values('Total_Volume', ascending=False).reset_index()
         dept_stats.index += 1
         st.dataframe(dept_stats, use_container_width=True)
+    else:
+        st.info("No data matching filters")
