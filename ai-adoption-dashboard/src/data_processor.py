@@ -7,7 +7,6 @@ class DataProcessor:
     def __init__(self, employee_file_path=None):
         self.employee_map = {}
         if employee_file_path:
-            # CRITICAL FIX: Check if file exists before reading
             if os.path.exists(employee_file_path):
                 self._load_employee_mapping(employee_file_path)
             else:
@@ -20,13 +19,23 @@ class DataProcessor:
             # Normalize columns: lowercase, strip whitespace
             df.columns = [c.strip() for c in df.columns]
             
-            # Find Email and Function columns robustly
+            # Find Email column (robust search)
             email_col = next((c for c in df.columns if 'email' in c.lower()), 'Email')
-            func_col = next((c for c in df.columns if 'function' in c.lower()), 'Function')
             
+            # Find Department column (Robust search for 'Function' or 'Department')
+            # Note: Your specific file uses 'Function' for department
+            func_col = next((c for c in df.columns if 'function' in c.lower()), None)
+            if not func_col:
+                 func_col = next((c for c in df.columns if 'department' in c.lower()), 'Function')
+
+            # Clean data for matching
             df[email_col] = df[email_col].astype(str).str.lower().str.strip()
             df[func_col] = df[func_col].astype(str).str.strip()
+            
+            # Create the master dictionary {email: department}
             self.employee_map = dict(zip(df[email_col], df[func_col]))
+            print(f"✅ Loaded {len(self.employee_map)} employee records for mapping.")
+            
         except Exception as e:
             print(f"⚠️ Warning: Could not process employee file: {e}")
 
@@ -51,8 +60,12 @@ class DataProcessor:
         
         # Map Metadata
         melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
+        
+        # --- STRICT MAPPING ---
+        # Use Employee Map ONLY. If missing, label 'Unassigned'. 
+        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
+        
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
-        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unknown')
         melted['Tool'] = 'BlueFlame'
         melted['Feature'] = 'Investment Research' 
         
@@ -81,17 +94,10 @@ class DataProcessor:
                 
             name = row.get('name', email.split('@')[0])
             
-            # Department Logic: Try Map -> Fallback to JSON parse -> 'Unknown'
-            dept = self.employee_map.get(email)
-            if not dept:
-                raw_dept = str(row.get('department', ''))
-                if '[' in raw_dept:
-                    try:
-                        dept = raw_dept.strip('[]"\' ').title()
-                    except:
-                        dept = 'Unknown'
-                else:
-                    dept = 'Unknown'
+            # --- STRICT MAPPING ---
+            # We IGNORE the 'department' column from the CSV completely.
+            # Only the Employee Headcount file is trusted.
+            dept = self.employee_map.get(email, 'Unassigned')
             
             # Create rows for each feature
             for col, feature_name in feature_mapping.items():
@@ -110,10 +116,9 @@ class DataProcessor:
         return pd.DataFrame(records)
 
     def get_unified_data(self, bf_paths=None, openai_paths=None):
-        """Main entry point. Handles lists of file paths."""
+        """Main entry point."""
         dfs = []
         
-        # Helper to read CSV from path
         def read_csv_path(path):
              return pd.read_csv(path), os.path.basename(path)
 
