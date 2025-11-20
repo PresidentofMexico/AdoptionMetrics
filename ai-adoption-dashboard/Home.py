@@ -76,17 +76,16 @@ with st.sidebar:
     st.subheader("💬 ChatGPT Message Types")
     st.caption("Filters do not apply to BlueFlame (Total Volume).")
     
-    # Get only OpenAI features for the list to avoid confusion
     openai_features = sorted(df[df['Tool'] == 'ChatGPT']['Feature'].unique())
     
-    # Default to 'Standard Chat' (High Signal)
-    default_features = ['Standard Chat'] if 'Standard Chat' in openai_features else openai_features
+    # UPDATED DEFAULT: Match the new "ChatGPT Messages" label
+    default_features = ['ChatGPT Messages'] if 'ChatGPT Messages' in openai_features else openai_features
     
     selected_features = st.multiselect(
         "Filter Message Categories", 
         openai_features, 
         default=default_features,
-        help="Select which ChatGPT interactions to count. 'Standard Chat' is the best proxy for true human usage."
+        help="Select which ChatGPT interactions to count."
     )
 
     # 4. Department Filter
@@ -95,9 +94,6 @@ with st.sidebar:
     depts = st.multiselect("Departments", all_depts, default=all_depts)
 
 # --- Global Filter Application ---
-# LOGIC: 
-# 1. Must match Date, Tool, and Dept.
-# 2. THEN: It's kept if it is BlueFlame OR if it matches the selected OpenAI feature.
 mask = (
     (df['Date'] >= pd.to_datetime(date_range[0])) & 
     (df['Date'] <= pd.to_datetime(date_range[1])) & 
@@ -171,7 +167,6 @@ with tab_breakdown:
     st.subheader("Organizational Usage Hierarchy")
     st.caption("Click segments to drill down: Tool → Department → Feature")
     
-    # Sunburst Chart for hierarchical data
     fig_sun = px.sunburst(
         filtered_df, 
         path=['Tool', 'Department', 'Feature'], 
@@ -186,7 +181,6 @@ with tab_breakdown:
 with tab_leaderboard:
     st.subheader("Identify Your Power Users")
     
-    # Advanced Pivot Table
     pivot_df = filtered_df.pivot_table(
         index=['Name', 'Department'], 
         columns='Tool', 
@@ -195,11 +189,9 @@ with tab_leaderboard:
         fill_value=0
     ).reset_index()
     
-    # Calculate Total
     pivot_df['Total_Activity'] = pivot_df.get('ChatGPT', 0) + pivot_df.get('BlueFlame', 0)
     pivot_df = pivot_df.sort_values('Total_Activity', ascending=False).head(50)
     
-    # Formatting for display
     st.dataframe(
         pivot_df,
         column_order=("Name", "Department", "Total_Activity", "ChatGPT", "BlueFlame"),
@@ -210,194 +202,4 @@ with tab_leaderboard:
             "ChatGPT": st.column_config.NumberColumn("ChatGPT"),
             "BlueFlame": st.column_config.NumberColumn("BlueFlame"),
         }
-    )import streamlit as st
-import pandas as pd
-import plotly.express as px
-import os
-import glob
-from src.data_processor import DataProcessor
-
-# --- Configuration ---
-st.set_page_config(page_title="AI Executive Dashboard", page_icon="🚀", layout="wide")
-
-# --- Styling ---
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        text-align: center;
-        border: 1px solid #e0e0e0;
-    }
-    .big-number { font-size: 32px; font-weight: 800; color: #1E3A8A; }
-    .metric-label { font-size: 14px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-</style>
-""", unsafe_allow_html=True)
-
-# --- Data Loading Logic ---
-@st.cache_data(show_spinner="Processing Data...")
-def load_and_process_data():
-    # Determine Paths
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(script_dir)
-    search_paths = [script_dir, repo_root, os.path.join(script_dir, "data"), os.path.join(repo_root, "data")]
-    
-    emp_path = None
-    bf_files = []
-    openai_files = []
-
-    # 1. Find Employee File
-    for folder in search_paths:
-        if not os.path.exists(folder): continue
-        found = glob.glob(os.path.join(folder, "Employee Headcount*"))
-        if found: 
-            emp_path = found[0]
-            break
-    
-    # 2. Find Usage Files
-    for folder in search_paths:
-        if not os.path.exists(folder): continue
-        bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")) + glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
-        openai_files.extend(glob.glob(os.path.join(folder, "*Openai*.csv")) + glob.glob(os.path.join(folder, "*ChatGPT*.csv")))
-    
-    bf_files = list(set(bf_files))
-    openai_files = list(set(openai_files))
-
-    # 3. Run Processor
-    processor = DataProcessor(emp_path)
-    df = processor.get_unified_data(bf_paths=bf_files, openai_paths=openai_files)
-    
-    return df, emp_path, bf_files, openai_files, processor.debug_log
-
-# --- App Logic ---
-try:
-    df, emp_path, bf_files, openai_files, debug_log = load_and_process_data()
-    
-    # SAFETY CHECK: If Name column is missing, something is wrong with cache or empty data
-    if 'Name' not in df.columns:
-        st.error("CRITICAL: 'Name' column missing in dataframe. Clearing cache...")
-        st.cache_data.clear()
-        st.rerun()
-
-except Exception as e:
-    st.error(f"Processing Error: {e}")
-    st.stop()
-
-# --- Sidebar Debug & Filters ---
-with st.sidebar:
-    st.header("🎛️ Controls")
-    
-    if st.button("🔥 Nuke Cache & Reload"):
-        st.cache_data.clear()
-        st.rerun()
-
-    # DIAGNOSTICS
-    with st.expander("🔍 Diagnostics", expanded=True):
-        if emp_path:
-            st.success(f"✅ Emp: {os.path.basename(emp_path)}")
-        else:
-            st.error("❌ Emp File Missing")
-            
-        st.write(f"**BF Files:** {len(bf_files)}")
-        st.write(f"**OpenAI Files:** {len(openai_files)}")
-        
-        st.write("**Logs:**")
-        for log in debug_log:
-            if "Sample" in log: st.code(log) # Show samples in code block
-            elif "❌" in log: st.error(log)
-            elif "✅" in log: st.success(log)
-            else: st.caption(log)
-            
-        # Department Check
-        if not df.empty:
-            unassigned = len(df[df['Department'] == 'Unassigned'])
-            total = len(df)
-            st.write(f"**Unassigned:** {unassigned}/{total}")
-
-    if df.empty:
-        st.warning("No data found.")
-        st.stop()
-        
-    # Filters
-    st.divider()
-    df['Date'] = pd.to_datetime(df['Date'])
-    
-    min_date = df['Date'].min()
-    max_date = df['Date'].max()
-    date_range = st.date_input("Date Range", value=(min_date, max_date))
-    
-    tools = st.multiselect("Select Tools", df['Tool'].unique(), default=df['Tool'].unique())
-    
-    available_depts = sorted([str(d) for d in df['Department'].unique()])
-    depts = st.multiselect("Select Departments", available_depts, default=available_depts)
-
-# Apply Filters
-mask = (
-    (df['Date'] >= pd.to_datetime(date_range[0])) & 
-    (df['Date'] <= pd.to_datetime(date_range[1])) & 
-    (df['Tool'].isin(tools)) & 
-    (df['Department'].astype(str).isin(depts))
-)
-filtered_df = df[mask]
-
-# --- Main Dashboard ---
-st.title("🚀 Enterprise AI Adoption Dashboard")
-
-# 1. Top Level Metrics
-col1, col2, col3, col4 = st.columns(4)
-total_users = filtered_df['Email'].nunique()
-total_activities = filtered_df['Count'].sum()
-active_depts = filtered_df['Department'].nunique()
-top_tool = filtered_df.groupby('Tool')['Count'].sum().idxmax() if not filtered_df.empty else "N/A"
-
-def custom_metric(label, value, col):
-    col.markdown(f"""<div class="metric-card"><div class="metric-label">{label}</div><div class="big-number">{value}</div></div>""", unsafe_allow_html=True)
-
-custom_metric("Active Users", f"{total_users:,}", col1)
-custom_metric("Total Interactions", f"{total_activities:,.0f}", col2)
-custom_metric("Active Departments", active_depts, col3)
-custom_metric("Top Platform", top_tool, col4)
-
-st.write("")
-
-# 2. Adoption Rate & Trends
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.subheader("📈 Adoption Trend")
-    if not filtered_df.empty:
-        mau_trend = filtered_df.set_index('Date').groupby([pd.Grouper(freq='M'), 'Tool'])['Email'].nunique().reset_index()
-        fig_mau = px.line(mau_trend, x='Date', y='Email', color='Tool', markers=True, labels={'Email': 'Active Users'})
-        st.plotly_chart(fig_mau, use_container_width=True)
-
-with c2:
-    st.subheader("🛠️ Usage Breakdown")
-    if not filtered_df.empty:
-        feature_mix = filtered_df.groupby('Feature')['Count'].sum().reset_index()
-        fig_pie = px.pie(feature_mix, values='Count', names='Feature', hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-# 3. Leaderboards
-st.divider()
-tab1, tab2 = st.tabs(["👥 Top Users", "🏢 Top Departments"])
-
-with tab1:
-    if not filtered_df.empty:
-        user_stats = filtered_df.groupby(['Name', 'Department']).agg(
-            Total_Interactions=('Count', 'sum'),
-            Tools_Used=('Tool', lambda x: ", ".join(x.unique())),
-            Last_Active=('Date', 'max')
-        ).sort_values('Total_Interactions', ascending=False).head(25).reset_index()
-        user_stats.index += 1
-        st.dataframe(user_stats, use_container_width=True)
-
-with tab2:
-    if not filtered_df.empty:
-        dept_stats = filtered_df.groupby('Department').agg(
-            Active_Users=('Email', 'nunique'),
-            Total_Volume=('Count', 'sum')
-        ).sort_values('Total_Volume', ascending=False).reset_index()
-        dept_stats.index += 1
-        st.dataframe(dept_stats, use_container_width=True)
+    )
