@@ -1,63 +1,77 @@
-"""
-Metrics Calculation Module
-
-Pure Python functions to calculate ROI, adoption %, and other metrics.
-"""
-
-from typing import Dict, Any
 import pandas as pd
+import numpy as np
 
-
-def calculate_roi(cost: float, benefit: float) -> float:
-    """
-    Calculate Return on Investment.
-    
-    Args:
-        cost: Total cost of AI implementation
-        benefit: Total benefit gained
+class MetricsEngine:
+    def __init__(self, df):
+        self.df = df.copy()
         
-    Returns:
-        ROI as a percentage
-    """
-    if cost == 0:
-        return 0.0
-    return ((benefit - cost) / cost) * 100
-
-
-def calculate_adoption_rate(total_users: int, active_users: int) -> float:
-    """
-    Calculate adoption rate percentage.
-    
-    Args:
-        total_users: Total number of users
-        active_users: Number of active users
+    def calculate_roi(self, hourly_rate=100, assumptions=None):
+        """
+        Calculates time and dollar savings based on feature type.
+        """
+        if assumptions is None:
+            # Default minutes saved per interaction type
+            assumptions = {
+                'Standard Chat': 5, 
+                'ChatGPT Messages': 5,
+                'Investment Research': 15, # High value (BlueFlame)
+                'BlueFlame Messages': 15,
+                'Advanced Data Analysis': 30,
+                'Tool Messages': 30,
+                'Custom GPTs': 10,
+                'Project Messages': 10
+            }
+            
+        # Map assumptions to the dataframe
+        # Default to 5 mins if feature not found
+        self.df['Minutes_Saved'] = self.df['Feature'].map(assumptions).fillna(5) * self.df['Count']
+        self.df['Hours_Saved'] = self.df['Minutes_Saved'] / 60
+        self.df['Dollar_Value'] = self.df['Hours_Saved'] * hourly_rate
         
-    Returns:
-        Adoption rate as a percentage
-    """
-    if total_users == 0:
-        return 0.0
-    return (active_users / total_users) * 100
+        return self.df
 
-
-def calculate_user_engagement(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Calculate user engagement metrics.
-    
-    Args:
-        df: DataFrame with user activity data
+    def get_efficiency_quadrant(self):
+        """
+        Generates data for the "Volume vs. Diversity" scatter plot.
+        Identifies: Power Users vs. Specialists vs. Tourists.
+        """
+        # 1. Volume (Total Interactions)
+        # 2. Diversity (Unique Tools/Features used)
+        stats = self.df.groupby(['Department']).agg(
+            Active_Users=('Email', 'nunique'),
+            Total_Volume=('Count', 'sum'),
+            Unique_Features=('Feature', 'nunique'),
+            Tools_Used=('Tool', 'nunique')
+        ).reset_index()
         
-    Returns:
-        Dictionary with engagement metrics
-    """
-    metrics = {
-        'total_sessions': 0,
-        'avg_session_duration': 0.0,
-        'active_users': 0
-    }
-    
-    if df is not None and not df.empty:
-        # Add actual calculation logic based on your data structure
-        pass
-    
-    return metrics
+        # Calculate "Intensity" (Vol / User)
+        stats['Intensity'] = stats['Total_Volume'] / stats['Active_Users']
+        
+        # Calculate Quadrant Medians
+        stats['Median_Vol'] = stats['Total_Volume'].median()
+        stats['Median_Diversity'] = stats['Unique_Features'].median()
+        
+        return stats
+
+    def get_user_leaderboard(self):
+        """
+        Generates a clean user table with 'Efficiency Badges'.
+        """
+        user_stats = self.df.groupby(['Name', 'Department', 'Email']).agg(
+            Total_Interactions=('Count', 'sum'),
+            Tools_Used=('Tool', lambda x: list(set(x))),
+            Last_Active=('Date', 'max')
+        ).reset_index()
+
+        # Logic for Badges
+        # Top 10% = 'Champion', Top 30% = 'Power User', Bottom 30% = 'Explorer'
+        p90 = user_stats['Total_Interactions'].quantile(0.90)
+        p70 = user_stats['Total_Interactions'].quantile(0.70)
+        
+        def get_badge(vol):
+            if vol >= p90: return "🔥 Champion"
+            if vol >= p70: return "⚡ Power User"
+            return "🌱 Explorer"
+
+        user_stats['Status'] = user_stats['Total_Interactions'].apply(get_badge)
+        return user_stats.sort_values('Total_Interactions', ascending=False)
