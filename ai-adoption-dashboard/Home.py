@@ -27,21 +27,36 @@ st.markdown("""
 # --- Data Loading Logic ---
 @st.cache_data(show_spinner="Processing Data...")
 def load_and_process_data():
-    # 1. Identify Files in 'data/' directory
-    base_path = "data"
+    # Search in current directory (.) AND 'data' folder
+    search_folders = [".", "data"]
     
-    # Find Employee File
-    emp_files = glob.glob(os.path.join(base_path, "Employee Headcount*"))
-    emp_path = emp_files[0] if emp_files else None
+    emp_path = None
+    bf_files = []
+    openai_files = []
+
+    # 1. Find Employee File
+    for folder in search_folders:
+        found = glob.glob(os.path.join(folder, "Employee Headcount*"))
+        if found:
+            emp_path = found[0]
+            break # Stop searching once found
     
-    # Find Usage Files
-    bf_files = glob.glob(os.path.join(base_path, "*blueflame*"))
-    openai_files = glob.glob(os.path.join(base_path, "*Openai*"))
+    # 2. Find Usage Files
+    for folder in search_folders:
+        # Find BlueFlame (look for csvs with 'blueflame' in name)
+        bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")))
+        bf_files.extend(glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
+        
+        # Find OpenAI (look for csvs with 'Openai' or 'ChatGPT' in name)
+        openai_files.extend(glob.glob(os.path.join(folder, "*Openai*.csv")))
+        openai_files.extend(glob.glob(os.path.join(folder, "*ChatGPT*.csv")))
     
-    # 2. Initialize Processor
+    # Deduplicate files if found in multiple searches
+    bf_files = list(set(bf_files))
+    openai_files = list(set(openai_files))
+
+    # 3. Run Processor
     processor = DataProcessor(emp_path)
-    
-    # 3. Generate Data
     df = processor.get_unified_data(bf_paths=bf_files, openai_paths=openai_files)
     
     return df, emp_path, bf_files, openai_files
@@ -57,18 +72,23 @@ except Exception as e:
 with st.sidebar:
     st.header("🎛️ Controls")
     
-    # Debug Info (Collapsible)
-    with st.expander("📂 Data Source Status"):
-        st.caption(f"**Employee File:** {'✅ Found' if emp_path else '❌ Missing'}")
-        st.caption(f"**BlueFlame Files:** {len(bf_files)}")
-        st.caption(f"**OpenAI Files:** {len(openai_files)}")
+    # Debug Info (shows you exactly what files were found)
+    with st.expander("📂 Data Source Status", expanded=True):
+        if emp_path:
+            st.success(f"✅ Employees: {os.path.basename(emp_path)}")
+        else:
+            st.error("❌ Employee File Missing")
+            
+        st.info(f"🔹 BlueFlame Files: {len(bf_files)}")
+        st.info(f"🔹 OpenAI Files: {len(openai_files)}")
+        
         if not df.empty:
             st.caption(f"**Total Records:** {len(df)}")
         else:
-            st.error("No records generated!")
+            st.warning("⚠️ No unified records created")
 
     if df.empty:
-        st.warning("No data found. Please ensure files are in the 'data/' folder.")
+        st.warning("No data found. Please check your file names.")
         st.stop()
         
     # Filters
