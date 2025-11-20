@@ -59,28 +59,30 @@ def load_and_process_data():
     
     return df, emp_path, bf_files, openai_files, processor.debug_log
 
-# --- App Logic & Safety Check ---
+# --- App Logic ---
 try:
     df, emp_path, bf_files, openai_files, debug_log = load_and_process_data()
     
-    # SELF-HEALING: Check for stale cache
-    if not df.empty and 'Name' not in df.columns:
+    # SAFETY CHECK: If Name column is missing, something is wrong with cache or empty data
+    if 'Name' not in df.columns:
+        st.error("CRITICAL: 'Name' column missing in dataframe. Clearing cache...")
         st.cache_data.clear()
-        st.warning("⚠️ Stale data detected. Clearing cache and reloading... Please refresh the page manually if this persists.")
-        st.stop()
+        st.rerun()
 
 except Exception as e:
-    st.error(f"Critical Error during processing: {e}")
-    if "Name" in str(e):
-        st.info("💡 Tip: Try clearing the cache (Press 'C')")
+    st.error(f"Processing Error: {e}")
     st.stop()
 
 # --- Sidebar Debug & Filters ---
 with st.sidebar:
     st.header("🎛️ Controls")
     
+    if st.button("🔥 Nuke Cache & Reload"):
+        st.cache_data.clear()
+        st.rerun()
+
     # DIAGNOSTICS
-    with st.expander("🔍 Diagnostics", expanded=False):
+    with st.expander("🔍 Diagnostics", expanded=True):
         if emp_path:
             st.success(f"✅ Emp: {os.path.basename(emp_path)}")
         else:
@@ -91,12 +93,19 @@ with st.sidebar:
         
         st.write("**Logs:**")
         for log in debug_log:
-            if "❌" in log: st.error(log)
-            elif "⚠️" in log: st.warning(log)
+            if "Sample" in log: st.code(log) # Show samples in code block
+            elif "❌" in log: st.error(log)
+            elif "✅" in log: st.success(log)
             else: st.caption(log)
+            
+        # Department Check
+        if not df.empty:
+            unassigned = len(df[df['Department'] == 'Unassigned'])
+            total = len(df)
+            st.write(f"**Unassigned:** {unassigned}/{total}")
 
     if df.empty:
-        st.warning("No unified data found.")
+        st.warning("No data found.")
         st.stop()
         
     # Filters
@@ -105,12 +114,10 @@ with st.sidebar:
     
     min_date = df['Date'].min()
     max_date = df['Date'].max()
-    
     date_range = st.date_input("Date Range", value=(min_date, max_date))
     
     tools = st.multiselect("Select Tools", df['Tool'].unique(), default=df['Tool'].unique())
     
-    # Dept Filter
     available_depts = sorted([str(d) for d in df['Department'].unique()])
     depts = st.multiselect("Select Departments", available_depts, default=available_depts)
 
@@ -131,13 +138,7 @@ col1, col2, col3, col4 = st.columns(4)
 total_users = filtered_df['Email'].nunique()
 total_activities = filtered_df['Count'].sum()
 active_depts = filtered_df['Department'].nunique()
-
-# Safely get top tool
-if not filtered_df.empty:
-    tool_counts = filtered_df.groupby('Tool')['Count'].sum()
-    top_tool = tool_counts.idxmax() if not tool_counts.empty else "N/A"
-else:
-    top_tool = "N/A"
+top_tool = filtered_df.groupby('Tool')['Count'].sum().idxmax() if not filtered_df.empty else "N/A"
 
 def custom_metric(label, value, col):
     col.markdown(f"""<div class="metric-card"><div class="metric-label">{label}</div><div class="big-number">{value}</div></div>""", unsafe_allow_html=True)
@@ -179,8 +180,6 @@ with tab1:
         ).sort_values('Total_Interactions', ascending=False).head(25).reset_index()
         user_stats.index += 1
         st.dataframe(user_stats, use_container_width=True)
-    else:
-        st.info("No data matching filters")
 
 with tab2:
     if not filtered_df.empty:
@@ -190,5 +189,3 @@ with tab2:
         ).sort_values('Total_Volume', ascending=False).reset_index()
         dept_stats.index += 1
         st.dataframe(dept_stats, use_container_width=True)
-    else:
-        st.info("No data matching filters")
