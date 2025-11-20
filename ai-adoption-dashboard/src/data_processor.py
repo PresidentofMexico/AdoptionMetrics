@@ -6,8 +6,8 @@ from pathlib import Path
 class DataProcessor:
     def __init__(self, employee_file_path=None):
         self.employee_map = {}
-        # Robust path handling
         if employee_file_path:
+            # CRITICAL FIX: Check if file exists before reading
             if os.path.exists(employee_file_path):
                 self._load_employee_mapping(employee_file_path)
             else:
@@ -54,7 +54,7 @@ class DataProcessor:
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
         melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unknown')
         melted['Tool'] = 'BlueFlame'
-        melted['Feature'] = 'Investment Research' # Specific tag for high-value work
+        melted['Feature'] = 'Investment Research' 
         
         return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
 
@@ -110,23 +110,17 @@ class DataProcessor:
         return pd.DataFrame(records)
 
     def get_unified_data(self, bf_paths=None, openai_paths=None):
-        """
-        Main entry point. Handles lists of file paths OR file objects.
-        """
+        """Main entry point. Handles lists of file paths."""
         dfs = []
         
-        # Helper to read CSV regardless of input type
-        def read_csv_safe(file_input):
-            if isinstance(file_input, str) or isinstance(file_input, Path):
-                return pd.read_csv(file_input), os.path.basename(file_input)
-            else: # Streamlit UploadedFile object
-                file_input.seek(0)
-                return pd.read_csv(file_input), file_input.name
+        # Helper to read CSV from path
+        def read_csv_path(path):
+             return pd.read_csv(path), os.path.basename(path)
 
         if bf_paths:
             for f in bf_paths:
                 try:
-                    df, fname = read_csv_safe(f)
+                    df, fname = read_csv_path(f)
                     dfs.append(self.process_blueflame(df, fname))
                 except Exception as e:
                     print(f"Error processing BlueFlame file {f}: {e}")
@@ -134,7 +128,7 @@ class DataProcessor:
         if openai_paths:
             for f in openai_paths:
                 try:
-                    df, fname = read_csv_safe(f)
+                    df, fname = read_csv_path(f)
                     dfs.append(self.process_openai(df, fname))
                 except Exception as e:
                     print(f"Error processing OpenAI file {f}: {e}")
