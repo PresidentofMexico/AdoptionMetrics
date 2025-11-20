@@ -14,7 +14,7 @@ except Exception as e:
     st.error(f"Error: {e}"); st.stop()
 
 st.title("💎 ROI & Business Impact")
-st.markdown("Quantifying the value of AI acceleration with adjustable sensitivity.")
+st.markdown("Quantifying the net financial impact of AI acceleration.")
 
 # --- Interactive Assumptions ---
 with st.expander("🧮 ROI Configuration Model", expanded=True):
@@ -27,9 +27,19 @@ with st.expander("🧮 ROI Configuration Model", expanded=True):
         time_chat = c2.number_input("Chat (Simple)", value=5, help="Quick questions, rewrites")
         time_research = c3.number_input("Research (Complex)", value=15, help="BlueFlame / Deep Research")
         time_analysis = c4.number_input("Data Analysis", value=30, help="Coding / Excel / Visualization")
+        
+        # NEW: Cost Basis Input
+        st.markdown("**2. Monthly Cost Structure**")
+        # Defaulting to ~$30,500 based on your contracts (BF ~$20.8k + OpenAI ~$10k)
+        monthly_cost = st.number_input(
+            "Total Software Cost ($)", 
+            value=30500, 
+            step=1000, 
+            help="Combined monthly spend (BlueFlame License + OpenAI Enterprise)"
+        )
 
     with col_haircut:
-        st.markdown("**2. The 'Reality Check'**")
+        st.markdown("**3. The 'Reality Check'**")
         discount_rate = st.slider(
             "Discount Factor (%)", 
             min_value=0, 
@@ -51,14 +61,16 @@ with st.expander("🧮 ROI Configuration Model", expanded=True):
 
 # --- Run Calculations ---
 engine = MetricsEngine(df)
+# Calculate Gross Value (with Discount Factor applied)
 roi_df = engine.calculate_roi(hourly_rate, assumptions, discount_rate=discount_rate/100)
 
 # --- Top Level Impact ---
 total_hours = roi_df['Hours_Saved'].sum()
-total_value = roi_df['Dollar_Value'].sum()
+gross_value = roi_df['Dollar_Value'].sum()
+net_profit = gross_value - monthly_cost # The CFO Number
 equivalent_fte = total_hours / (40 * 52) 
 
-# Visualization of the "Haircut"
+# Visualization of the P&L
 st.divider()
 m1, m2, m3 = st.columns(3)
 
@@ -68,11 +80,15 @@ m1.metric(
     delta=f"-{discount_rate}% adjustment applied", 
     delta_color="inverse"
 )
+
+# THE NEW CFO METRIC
 m2.metric(
-    "💰 Net Value Created", 
-    f"${total_value:,.0f}",
-    help=f"Value after applying {discount_rate}% discount factor"
+    "💰 Monthly Net Profit", 
+    f"${net_profit:,.0f}",
+    delta=f"Gross ${gross_value:,.0f} - Cost ${monthly_cost:,.0f}",
+    help=f"Actual Value Generated after paying the ${monthly_cost:,.0f} bill."
 )
+
 m3.metric(
     "🤖 Digital FTE Capacity", 
     f"{equivalent_fte:.1f} FTEs", 
@@ -95,7 +111,7 @@ with c1:
         text_auto='.2s',
         color_discrete_map={'ChatGPT': '#10a37f', 'BlueFlame': '#2563EB'}
     )
-    fig_bar.update_layout(yaxis_title="Net Dollar Value")
+    fig_bar.update_layout(yaxis_title="Gross Dollar Value Generated")
     st.plotly_chart(fig_bar, use_container_width=True)
 
 with c2:
@@ -110,7 +126,7 @@ with c2:
         color="Dollar_Value",
         color_continuous_scale="Greens"
     )
-    fig_hbar.update_layout(xaxis_title="Net Dollar Value", showlegend=False)
+    fig_hbar.update_layout(xaxis_title="Gross Dollar Value", showlegend=False)
     st.plotly_chart(fig_hbar, use_container_width=True)
 
 # --- Capability Matrix ---
