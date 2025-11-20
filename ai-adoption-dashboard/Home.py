@@ -21,5 +21,5 @@ This dashboard provides insights into AI adoption metrics across your organizati
 
 Use the sidebar to navigate to different sections:
 - 📈 **Trends**: View adoption trends over time
-- 👥 **User Deep Dive**: Analyze individual user behavior
+- 👥 **Leaderboard**: View top performers and rankings
 """)
