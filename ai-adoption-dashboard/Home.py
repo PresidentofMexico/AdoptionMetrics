@@ -27,43 +27,59 @@ st.markdown("""
 # --- Data Loading Logic ---
 @st.cache_data(show_spinner="Processing Data...")
 def load_and_process_data():
-    # Search in current directory (.) AND 'data' folder
-    search_folders = [".", "data"]
+    # 1. Determine Paths (Robustly)
+    # Get the folder where Home.py lives
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Get the folder ABOVE Home.py (Repo Root)
+    repo_root = os.path.dirname(script_dir)
+    
+    # Define where to look (Current folder, Parent folder, and 'data' subfolders)
+    search_paths = [
+        script_dir,                     # ai-adoption-dashboard/
+        repo_root,                      # / (Repo Root - Most likely location!)
+        os.path.join(script_dir, "data"), 
+        os.path.join(repo_root, "data")
+    ]
     
     emp_path = None
     bf_files = []
     openai_files = []
 
-    # 1. Find Employee File
-    for folder in search_folders:
-        found = glob.glob(os.path.join(folder, "Employee Headcount*"))
-        if found:
-            emp_path = found[0]
-            break # Stop searching once found
+    # 2. Find Files in all search paths
+    for folder in search_paths:
+        # Skip if folder doesn't exist
+        if not os.path.exists(folder):
+            continue
+            
+        # Find Employee File (Stop once found)
+        if not emp_path:
+            found = glob.glob(os.path.join(folder, "Employee Headcount*"))
+            if found: emp_path = found[0]
     
-    # 2. Find Usage Files
-    for folder in search_folders:
-        # Find BlueFlame (look for csvs with 'blueflame' in name)
+        # Find Usage Files (Collect all)
+        # Case insensitive search for BlueFlame
         bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")))
         bf_files.extend(glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
         
-        # Find OpenAI (look for csvs with 'Openai' or 'ChatGPT' in name)
+        # Case insensitive search for OpenAI/ChatGPT
         openai_files.extend(glob.glob(os.path.join(folder, "*Openai*.csv")))
         openai_files.extend(glob.glob(os.path.join(folder, "*ChatGPT*.csv")))
     
-    # Deduplicate files if found in multiple searches
+    # Deduplicate
     bf_files = list(set(bf_files))
     openai_files = list(set(openai_files))
 
     # 3. Run Processor
+    # Note: We assume src.data_processor is importable. 
+    # If Home.py is in ai-adoption-dashboard, this works fine.
     processor = DataProcessor(emp_path)
     df = processor.get_unified_data(bf_paths=bf_files, openai_paths=openai_files)
     
-    return df, emp_path, bf_files, openai_files
+    return df, emp_path, bf_files, openai_files, search_paths
 
 # --- App Logic ---
 try:
-    df, emp_path, bf_files, openai_files = load_and_process_data()
+    df, emp_path, bf_files, openai_files, search_paths = load_and_process_data()
 except Exception as e:
     st.error(f"Critical Error during processing: {e}")
     st.stop()
@@ -72,7 +88,7 @@ except Exception as e:
 with st.sidebar:
     st.header("🎛️ Controls")
     
-    # Debug Info (shows you exactly what files were found)
+    # Debug Info (shows exactly where it looked)
     with st.expander("📂 Data Source Status", expanded=True):
         if emp_path:
             st.success(f"✅ Employees: {os.path.basename(emp_path)}")
@@ -82,13 +98,14 @@ with st.sidebar:
         st.info(f"🔹 BlueFlame Files: {len(bf_files)}")
         st.info(f"🔹 OpenAI Files: {len(openai_files)}")
         
-        if not df.empty:
-            st.caption(f"**Total Records:** {len(df)}")
-        else:
+        if df.empty:
             st.warning("⚠️ No unified records created")
+            st.write("Checked folders:")
+            for p in search_paths:
+                st.code(p)
 
     if df.empty:
-        st.warning("No data found. Please check your file names.")
+        st.warning("No data found. Please check the 'Checked folders' list above.")
         st.stop()
         
     # Filters
@@ -101,14 +118,17 @@ with st.sidebar:
     date_range = st.date_input("Date Range", value=(min_date, max_date))
     
     tools = st.multiselect("Select Tools", df['Tool'].unique(), default=df['Tool'].unique())
-    depts = st.multiselect("Select Departments", sorted(df['Department'].astype(str).unique()), default=sorted(df['Department'].astype(str).unique()))
+    
+    # Handle potentially mixed types in Department
+    dept_list = sorted([str(d) for d in df['Department'].unique()])
+    depts = st.multiselect("Select Departments", dept_list, default=dept_list)
 
 # Apply Filters
 mask = (
     (df['Date'] >= pd.to_datetime(date_range[0])) & 
     (df['Date'] <= pd.to_datetime(date_range[1])) & 
     (df['Tool'].isin(tools)) & 
-    (df['Department'].isin(depts))
+    (df['Department'].astype(str).isin(depts))
 )
 filtered_df = df[mask]
 
