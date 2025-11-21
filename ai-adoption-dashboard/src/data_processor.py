@@ -2,6 +2,15 @@ import pandas as pd
 import glob
 import os
 import streamlit as st
+import sys
+
+# --- PATH FIX ---
+# Ensure we can find sibling modules if needed
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+# ----------------
+
 from src.config import DATA_DIR, HEADCOUNT_FILENAME
 
 class DataProcessor:
@@ -65,7 +74,6 @@ class DataProcessor:
                 # Parse Date
                 melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%d-%b', errors='coerce')
                 # Fallback for year assignment (assume current year or logic)
-                # If needed, assume 2024/2025. For now, let pandas guess or default.
                 melted['Date'] = melted['Date'].apply(lambda x: x.replace(year=2025) if pd.notnull(x) else x)
 
                 # Map User
@@ -135,13 +143,11 @@ class DataProcessor:
         return unified
 
 # --- GLOBAL LOADER FUNCTION ---
-# This function is imported by Home.py and all pages
 @st.cache_data(ttl=3600)
 def load_and_process_data():
     processor = DataProcessor()
     df = processor.get_unified_data()
     
-    # Basic validation
     if df.empty:
         return df, 0, 0
         
