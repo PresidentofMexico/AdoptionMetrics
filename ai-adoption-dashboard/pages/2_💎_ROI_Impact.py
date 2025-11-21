@@ -1,14 +1,14 @@
 import streamlit as st
 import plotly.express as px
 import pandas as pd
-from Home import load_and_process_data
+from src.data_processor import load_data
 from src.metrics import MetricsEngine
 
 st.set_page_config(page_title="ROI & Strategy", page_icon="💎", layout="wide")
 
 # --- Data Loading ---
 try:
-    df, _, _ = load_and_process_data()
+    df, _, _ = load_data()
     if df.empty: st.warning("No data found."); st.stop()
 except Exception as e:
     st.error(f"Error: {e}"); st.stop()
@@ -28,9 +28,7 @@ with st.expander("🧮 ROI Configuration Model", expanded=True):
         time_research = c3.number_input("Research (Complex)", value=15, help="BlueFlame / Deep Research")
         time_analysis = c4.number_input("Data Analysis", value=30, help="Coding / Excel / Visualization")
         
-        # NEW: Cost Basis Input
         st.markdown("**2. Monthly Cost Structure**")
-        # Defaulting to ~$30,500 based on your contracts (BF ~$20.8k + OpenAI ~$10k)
         monthly_cost = st.number_input(
             "Total Software Cost ($)", 
             value=30500, 
@@ -46,7 +44,7 @@ with st.expander("🧮 ROI Configuration Model", expanded=True):
             max_value=90, 
             value=50,
             step=10,
-            help="Reduces total value to account for trial-and-error, hallucinations, and learning curves. 50% means only half of interactions yielded final value."
+            help="Reduces total value to account for trial-and-error, hallucinations, and learning curves."
         )
         st.caption(f"Retaining **{100-discount_rate}%** of calculated value.")
     
@@ -61,16 +59,14 @@ with st.expander("🧮 ROI Configuration Model", expanded=True):
 
 # --- Run Calculations ---
 engine = MetricsEngine(df)
-# Calculate Gross Value (with Discount Factor applied)
 roi_df = engine.calculate_roi(hourly_rate, assumptions, discount_rate=discount_rate/100)
 
 # --- Top Level Impact ---
 total_hours = roi_df['Hours_Saved'].sum()
 gross_value = roi_df['Dollar_Value'].sum()
-net_profit = gross_value - monthly_cost # The CFO Number
+net_profit = gross_value - monthly_cost
 equivalent_fte = total_hours / (40 * 52) 
 
-# Visualization of the P&L
 st.divider()
 m1, m2, m3 = st.columns(3)
 
@@ -81,7 +77,6 @@ m1.metric(
     delta_color="inverse"
 )
 
-# THE NEW CFO METRIC
 m2.metric(
     "💰 Monthly Net Profit", 
     f"${net_profit:,.0f}",
