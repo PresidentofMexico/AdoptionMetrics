@@ -9,11 +9,11 @@ PRICE_PER_LICENSE = 20.0  # USD per license per month
 
 # ROI Assumptions
 HOURS_SAVED_PER_WEEK_PER_USER = 5.0  # Average hours saved per user per week
-AVERAGE_HOURLY_RATE = 50.0  # USD per hour (Fallback)
+AVERAGE_HOURLY_RATE = 50.0  # USD per hour
 WEEKS_PER_MONTH = 4.33  # Average weeks per month
 
 # Departmental Hourly Rates (Fully Loaded)
-# Used for granular ROI modeling
+# Used for granular ROI modeling in metrics.py
 DEPT_RATES = {
     'Legal': 250.0,
     'Finance': 175.0,
