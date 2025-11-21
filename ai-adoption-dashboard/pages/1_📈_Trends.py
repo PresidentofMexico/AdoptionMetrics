@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from Home import load_and_process_data
+from src.metrics import MetricsEngine
 
 st.set_page_config(page_title="Trends & Insights", page_icon="📈", layout="wide")
 
@@ -18,12 +19,10 @@ st.title("📈 Adoption Trends & Insights")
 st.markdown("Visualizing the velocity and trajectory of AI adoption.")
 
 # --- 1. TIME TRAVEL (Animated) ---
-st.subheader("⏳ The Evolution of Adoption (Press Play ▶️)")
+st.subheader("⏳ The Evolution of Adoption")
 st.caption("Watch how departments mature over time. Bubble Size = Monthly Volume.")
 
 # Prepare Data for Animation
-# Group by Month and Department
-# We need a cumulative view or a monthly snapshot. Let's do Monthly Snapshot for movement.
 ani_df = df.groupby([pd.Grouper(key='Date', freq='M'), 'Department']).agg(
     Active_Users=('Email', 'nunique'),
     Monthly_Volume=('Count', 'sum'),
@@ -35,8 +34,8 @@ ani_df['Date_Str'] = ani_df['Date'].dt.strftime('%Y-%m')
 ani_df = ani_df.sort_values('Date')
 
 # Calculate limits to keep chart stable
-max_users = ani_df['Active_Users'].max() * 1.1
-max_vol = ani_df['Monthly_Volume'].max() * 1.1
+max_users = ani_df['Active_Users'].max() * 1.1 if not ani_df.empty else 10
+max_vol = ani_df['Monthly_Volume'].max() * 1.1 if not ani_df.empty else 100
 
 fig_ani = px.scatter(
     ani_df,
@@ -82,7 +81,6 @@ with c1:
     filtered_race = daily_dept[daily_dept['Department'].isin(top_depts)].copy()
     
     # Calculate Cumulative
-    # We need to sort and group to cumsum correctly
     filtered_race = filtered_race.sort_values(['Department', 'Date'])
     filtered_race['Cumulative_Volume'] = filtered_race.groupby('Department')['Count'].cumsum()
     
@@ -156,3 +154,31 @@ fig_share.update_layout(
     plot_bgcolor="white"
 )
 st.plotly_chart(fig_share, use_container_width=True)
+
+# --- 4. RETENTION ANALYSIS (NEW) ---
+st.divider()
+st.subheader("🧲 User Retention Analysis")
+st.caption("Are we keeping our users? (Month-over-Month Retention)")
+
+engine = MetricsEngine(df)
+retention_df = engine.get_retention_matrix()
+
+if not retention_df.empty:
+    # Plot Retention Line
+    fig_ret = px.line(
+        retention_df, 
+        x='Month', 
+        y='Retention_Rate',
+        markers=True,
+        title="Global Retention Rate (%)",
+        labels={'Retention_Rate': 'Retention % (Users active next month)'}
+    )
+    fig_ret.update_traces(line_color='#EF4444', line_width=3)
+    fig_ret.update_layout(yaxis_range=[0, 110], plot_bgcolor="white")
+    
+    st.plotly_chart(fig_ret, use_container_width=True)
+    
+    with st.expander("View Detailed Retention Data"):
+        st.dataframe(retention_df)
+else:
+    st.info("Not enough monthly data to calculate retention (Need at least 2 months).")
