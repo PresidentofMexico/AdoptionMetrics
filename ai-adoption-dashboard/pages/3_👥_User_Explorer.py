@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from Home import load_and_process_data
+from src.data_processor import load_data
 from src.metrics import MetricsEngine
 
 st.set_page_config(page_title="User Explorer", page_icon="👥", layout="wide")
 
 try:
-    df, _, _ = load_and_process_data()
+    df, _, _ = load_data()
 except:
     st.error("Data load failed."); st.stop()
 
