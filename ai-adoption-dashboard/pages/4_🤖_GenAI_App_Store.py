@@ -18,7 +18,7 @@ except:
 # BlueFlame is an agent. Custom GPTs are agents.
 agent_mask = (
     (df['Tool'] == 'BlueFlame') | 
-    (df['Feature'].str.contains('GPT', case=False, na=False))
+    (df['Feature'] == 'GPT Messages')  # Use exact match or specific inclusion
 )
 agent_df = df[agent_mask].copy()
 
@@ -44,7 +44,9 @@ with c_chart:
     st.subheader("Agent Wars: BlueFlame vs. Custom GPTs")
     
     # Group by month and type
-    agent_df['Agent_Type'] = agent_df['Tool'].apply(lambda x: 'BlueFlame' if x == 'BlueFlame' else 'Custom GPTs')
+   agent_df['Agent_Type'] = agent_df['Tool'].apply(
+    lambda x: 'BlueFlame' if x == 'BlueFlame' else 'Custom GPTs'
+)
     
     trend = agent_df.groupby([pd.Grouper(key='Date', freq='M'), 'Agent_Type'])['Count'].sum().reset_index()
     
