@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from Home import load_and_process_data
+from src.data_processor import load_and_process_data
 
 st.set_page_config(page_title="GenAI App Store", page_icon="🤖", layout="wide")
 
@@ -14,11 +14,12 @@ try:
 except:
     st.stop()
 
-# Filter to only rows that represent Agentic usage
-# BlueFlame is an agent. Custom GPTs are agents.
+# --- FILTER LOGIC ---
+# We want: BlueFlame OR (Feature == 'GPT Messages')
+# We DO NOT want: 'ChatGPT Messages' (Standard Chat)
 agent_mask = (
     (df['Tool'] == 'BlueFlame') | 
-    (df['Feature'] == 'GPT Messages')  # Use exact match or specific inclusion
+    (df['Feature'] == 'GPT Messages') 
 )
 agent_df = df[agent_mask].copy()
 
@@ -28,12 +29,14 @@ if agent_df.empty:
 
 # --- 1. High Level Stats ---
 bf_vol = df[df['Tool'] == 'BlueFlame']['Count'].sum()
-gpt_vol = df[df['Feature'].str.contains('GPT', case=False, na=False)]['Count'].sum()
+# Only count explicit GPT Messages, not general chat
+gpt_vol = df[df['Feature'] == 'GPT Messages']['Count'].sum()
+total_vol = df['Count'].sum()
 
 c1, c2, c3 = st.columns(3)
-c1.metric("BlueFlame Volume", f"{bf_vol:,.0f}", help="Total messages sent to BlueFlame")
-c2.metric("Custom GPT Volume", f"{gpt_vol:,.0f}", help="Total messages sent to Custom GPTs")
-c3.metric("Agent Adoption Rate", f"{(bf_vol + gpt_vol) / df['Count'].sum():.1%}", help="% of total AI traffic going to Agents")
+c1.metric("BlueFlame Volume", f"{bf_vol:,.0f}")
+c2.metric("Custom GPT Volume", f"{gpt_vol:,.0f}")
+c3.metric("Agent Adoption Rate", f"{(bf_vol + gpt_vol) / total_vol:.1%}")
 
 st.divider()
 
@@ -43,10 +46,9 @@ c_chart, c_dept = st.columns([2, 1])
 with c_chart:
     st.subheader("Agent Wars: BlueFlame vs. Custom GPTs")
     
-    # Group by month and type
-   agent_df['Agent_Type'] = agent_df['Tool'].apply(
-    lambda x: 'BlueFlame' if x == 'BlueFlame' else 'Custom GPTs'
-)
+    agent_df['Agent_Type'] = agent_df['Tool'].apply(
+        lambda x: 'BlueFlame' if x == 'BlueFlame' else 'Custom GPTs'
+    )
     
     trend = agent_df.groupby([pd.Grouper(key='Date', freq='M'), 'Agent_Type'])['Count'].sum().reset_index()
     
