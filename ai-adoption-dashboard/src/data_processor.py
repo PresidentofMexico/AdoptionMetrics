@@ -1,135 +1,184 @@
 import pandas as pd
-import glob
-import os
 import re
+import os
+import glob
 import streamlit as st
-from . import config
+from src.config import HEADCOUNT_FILENAME, CHATGPT_EXPORT_PATTERN, BLUEFLAME_EXPORT_PATTERN
 
 class DataProcessor:
-    def __init__(self):
-        # Safely handle config if DATA_DIR is missing
-        self.data_dir = getattr(config, 'DATA_DIR', 'data')
-        self.month_map = {
-            'January': 1, 'February': 2, 'March': 3, 'April': 4, 'May': 5, 'June': 6,
-            'July': 7, 'August': 8, 'September': 9, 'October': 10, 'November': 11, 'December': 12
-        }
+    def __init__(self, employee_file_path=None):
+        self.employee_map = {}
+        self.debug_log = []
+        
+        if employee_file_path:
+            if os.path.exists(employee_file_path):
+                self._load_employee_mapping(employee_file_path)
+            else:
+                self.debug_log.append(f"❌ Employee file not found at path: {employee_file_path}")
+        else:
+            self.debug_log.append("⚠️ No employee file path provided")
 
-    def get_date_from_filename(self, filename):
-        """
-        Extracts date from filenames. 
-        Returns a timestamp defaulting to current time if not found.
-        """
-        base_name = os.path.basename(filename)
-        
-        # 1. Try finding full month name (e.g., "October")
-        for month_name, month_num in self.month_map.items():
-            if month_name in base_name:
-                # Infer year: look for 4 digits, otherwise default to 2025
-                year = 2025
-                year_match = re.search(r'202\d', base_name)
-                if year_match:
-                    year = int(year_match.group(0))
-                
-                return pd.Timestamp(year=year, month=month_num, day=1)
-        
-        # 2. Fallback
-        return pd.Timestamp.now()
-
-    def load_openai_data(self):
-        """Loads all OpenAI files matching the glob pattern."""
-        pattern = getattr(config, 'OPENAI_GLOB_PATTERN', '*openai*.csv')
-        all_files = glob.glob(os.path.join(self.data_dir, pattern))
-        df_list = []
-        
-        for filename in all_files:
+    def _load_employee_mapping(self, filepath):
+        try:
             try:
-                df = pd.read_csv(filename)
-                # Normalize columns
-                df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-                
-                # Add metadata
-                report_date = self.get_date_from_filename(filename)
-                df['report_date'] = report_date
-                df['month'] = report_date.strftime('%Y-%m')
-                df['tool'] = 'OpenAI'
-                
-                # Standardize Email
-                if 'user_email' not in df.columns and 'email' in df.columns:
-                    df['user_email'] = df['email']
-                
-                df_list.append(df)
-            except Exception as e:
-                print(f"Error loading OpenAI file {filename}: {e}")
+                df = pd.read_csv(filepath, encoding='utf-8-sig')
+            except:
+                df = pd.read_csv(filepath, encoding='latin1')
+
+            df.columns = [c.strip() for c in df.columns]
+            
+            email_col = next((c for c in df.columns if 'email' in c.lower()), None)
+            func_col = next((c for c in df.columns if 'function' in c.lower()), None)
+            if not func_col:
+                 func_col = next((c for c in df.columns if 'department' in c.lower()), None)
+
+            if not email_col or not func_col:
+                self.debug_log.append(f"❌ Column Missing in Emp File. Found: {df.columns.tolist()}")
+                return
+
+            df[email_col] = df[email_col].astype(str).str.lower().str.strip()
+            df[func_col] = df[func_col].astype(str).str.strip()
+            
+            self.employee_map = dict(zip(df[email_col], df[func_col]))
+            self.debug_log.append(f"✅ Mapped {len(self.employee_map)} employees.")
+            
+        except Exception as e:
+            self.debug_log.append(f"❌ Error processing employee file: {str(e)}")
+
+    def _get_empty_schema(self):
+        return pd.DataFrame(columns=['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count'])
+
+    def process_blueflame(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
+        # Identify date columns (e.g., '25-Apr')
+        date_cols = [c for c in df.columns if re.match(r'\d{2}-[A-Z][a-z]{2}', c)]
+        
+        if not date_cols:
+            return self._get_empty_schema()
+
+        melted = df.melt(id_vars=['User ID'], value_vars=date_cols, var_name='Date_Str', value_name='Count')
+        melted = melted.dropna(subset=['Count'])
+        melted['Count'] = pd.to_numeric(melted['Count'], errors='coerce').fillna(0)
+        melted = melted[melted['Count'] > 0]
+        melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%y-%b', errors='coerce')
+        
+        melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
+        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
+        melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
+        
+        melted['Tool'] = 'BlueFlame'
+        melted['Feature'] = 'BlueFlame Messages' 
+        
+        return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
+
+    def process_openai(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
+        records = []
+        
+        feature_mapping = {
+            'messages': 'ChatGPT Messages',      
+            'tool_messages': 'Tool Messages',    
+            'gpt_messages': 'GPT Messages',      
+            'project_messages': 'Project Messages' 
+        }
+        
+        df.columns = [c.lower() for c in df.columns]
+        
+        for _, row in df.iterrows():
+            email = str(row.get('email', '')).lower().strip()
+            if not email or email == 'nan': continue
+            
+            try:
+                date = pd.to_datetime(row.get('period_start'))
+            except:
                 continue
                 
-        return pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
-
-    def load_blueflame_data(self):
-        """Loads all BlueFlame files matching the glob pattern."""
-        pattern = getattr(config, 'BLUEFLAME_GLOB_PATTERN', '*blueflame*.csv')
-        all_files = glob.glob(os.path.join(self.data_dir, pattern))
-        df_list = []
+            name = row.get('name', email.split('@')[0])
+            dept = self.employee_map.get(email, 'Unassigned')
+            
+            for col, feature_name in feature_mapping.items():
+                count = pd.to_numeric(row.get(col, 0), errors='coerce')
+                if count > 0:
+                    records.append({
+                        'Date': date,
+                        'Email': email,
+                        'Name': name,
+                        'Department': dept,
+                        'Tool': 'ChatGPT',
+                        'Feature': feature_name,
+                        'Count': count
+                    })
         
-        for filename in all_files:
+        if not records:
+            return self._get_empty_schema()
+            
+        return pd.DataFrame(records)
+
+    def get_unified_data(self, bf_paths=None, openai_paths=None):
+        dfs = []
+        
+        def read_csv_safe(path):
             try:
-                df = pd.read_csv(filename)
-                df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-                
-                report_date = self.get_date_from_filename(filename)
-                df['report_date'] = report_date
-                df['month'] = report_date.strftime('%Y-%m')
-                df['tool'] = 'BlueFlame'
-                
-                df_list.append(df)
-            except Exception as e:
-                print(f"Error loading BlueFlame file {filename}: {e}")
+                return pd.read_csv(path, encoding='utf-8-sig'), os.path.basename(path)
+            except:
+                return pd.read_csv(path, encoding='latin1'), os.path.basename(path)
+
+        if bf_paths:
+            for f in bf_paths:
+                try:
+                    df, fname = read_csv_safe(f)
+                    dfs.append(self.process_blueflame(df, fname))
+                except Exception as e:
+                    self.debug_log.append(f"Error processing BF {os.path.basename(f)}: {e}")
+
+        if openai_paths:
+            for f in openai_paths:
+                try:
+                    df, fname = read_csv_safe(f)
+                    dfs.append(self.process_openai(df, fname))
+                except Exception as e:
+                    self.debug_log.append(f"Error processing OpenAI {os.path.basename(f)}: {e}")
+             
+        if not dfs: 
+            return self._get_empty_schema()
+            
+        result = pd.concat(dfs, ignore_index=True)
         
-        return pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+        if 'Feature' not in result.columns:
+             result['Feature'] = 'Unknown'
+             
+        return result
 
-# ---------------------------------------------------------
-# MASTER FUNCTION: Called by Home.py
-# ---------------------------------------------------------
-@st.cache_data
-def load_and_process_data():
+# --- Unified Data Loader (Moved from Home.py to fix circular imports) ---
+@st.cache_data(show_spinner="Processing Data...")
+def load_data():
     """
-    Loads all data sources, merges them, and prepares the final
-    dataframe for visualization.
-    Returns: (combined_df, total_users, total_vol)
+    Centralized data loading function. Scans directories and processes files.
     """
-    processor = DataProcessor()
+    # Robust path finding
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(script_dir)
+    # Search current dir, parent, and data subfolders
+    search_paths = [script_dir, repo_root, os.path.join(script_dir, "../data"), os.path.join(repo_root, "data")]
     
-    # 1. Load raw data
-    openai_df = processor.load_openai_data()
-    blueflame_df = processor.load_blueflame_data()
-    
-    # 2. Combine
-    combined_df = pd.concat([openai_df, blueflame_df], ignore_index=True)
+    emp_path = None
+    bf_files = []
+    openai_files = []
 
-    if combined_df.empty:
-        return pd.DataFrame(), 0, 0
-
-    # 3. Standardize Columns for Home.py
-    # Create 'Date'
-    if 'report_date' in combined_df.columns:
-        combined_df['Date'] = pd.to_datetime(combined_df['report_date'])
-    else:
-        combined_df['Date'] = pd.Timestamp.now()
-
-    # Create 'Department' (Handle missing values)
-    if 'department' in combined_df.columns:
-        combined_df['Department'] = combined_df['department'].fillna('Unknown')
-    else:
-        combined_df['Department'] = 'Unknown'
-
-    # Create 'Count' (Used for volume summation)
-    combined_df['Count'] = 1
-
-    # 4. Calculate Top Level Metrics
-    if 'user_email' in combined_df.columns:
-        total_users = combined_df['user_email'].nunique()
-    else:
-        total_users = 0
+    for folder in search_paths:
+        if not os.path.exists(folder): continue
         
-    total_vol = len(combined_df)
-
-    return combined_df, total_users, total_vol
+        # Find Headcount File
+        if not emp_path:
+            found = glob.glob(os.path.join(folder, f"{HEADCOUNT_FILENAME}*"))
+            if found: emp_path = found[0]
+    
+        # Find Usage Files using Config Patterns
+        for pattern in BLUEFLAME_EXPORT_PATTERN:
+            bf_files.extend(glob.glob(os.path.join(folder, pattern)))
+            
+        for pattern in CHATGPT_EXPORT_PATTERN:
+            openai_files.extend(glob.glob(os.path.join(folder, pattern)))
+    
+    processor = DataProcessor(emp_path)
+    # Remove duplicates
+    df = processor.get_unified_data(bf_paths=list(set(bf_files)), openai_paths=list(set(openai_files)))
+    return df, emp_path, processor.debug_log
