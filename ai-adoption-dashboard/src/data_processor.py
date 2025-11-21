@@ -2,6 +2,7 @@ import pandas as pd
 import glob
 import os
 import re
+import streamlit as st
 from . import config
 
 class DataProcessor:
@@ -86,3 +87,24 @@ class DataProcessor:
             return pd.DataFrame()
             
         return pd.concat(df_list, ignore_index=True)
+
+# ---------------------------------------------------------
+# THIS IS THE MISSING FUNCTION THAT HOME.PY WAS LOOKING FOR
+# ---------------------------------------------------------
+@st.cache_data
+def load_and_process_data():
+    """
+    Initializes the processor, loads both datasets, and returns them 
+    in a dictionary for easy access by the Streamlit pages.
+    """
+    processor = DataProcessor()
+    
+    # Load the data
+    openai_df = processor.load_openai_data()
+    blueflame_df = processor.load_blueflame_data()
+    
+    # Return as a dictionary
+    return {
+        "openai": openai_df,
+        "blueflame": blueflame_df
+    }
