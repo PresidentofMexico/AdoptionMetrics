@@ -19,7 +19,14 @@ def metric_card(title: str, value: str, delta: Optional[str] = None,
         delta: Optional change indicator
         delta_color: Color for delta ("normal", "inverse", "off")
     """
-    st.metric(label=title, value=value, delta=delta, delta_color=delta_color)
+    st.metric(label=title, value=str(value), delta=delta, delta_color=delta_color)
+
+
+def create_kpi_card(title: str, value: str, delta: Optional[str] = None):
+    """
+    Wrapper for metric_card to match Home.py requirements.
+    """
+    metric_card(title, value, delta)
 
 
 def roi_card(roi_value: float, currency_saved: float) -> None:
