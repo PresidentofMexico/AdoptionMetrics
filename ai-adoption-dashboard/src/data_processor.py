@@ -1,148 +1,151 @@
 import pandas as pd
-import re
+import glob
 import os
 import streamlit as st
+from src.config import DATA_DIR, HEADCOUNT_FILENAME
 
 class DataProcessor:
-    def __init__(self, employee_file_path=None):
+    def __init__(self, data_dir=DATA_DIR):
+        self.data_dir = data_dir
         self.employee_map = {}
         self.debug_log = []
         
-        if employee_file_path:
-            if os.path.exists(employee_file_path):
-                self._load_employee_mapping(employee_file_path)
-            else:
-                self.debug_log.append(f"❌ Employee file not found at path: {employee_file_path}")
-        else:
-            self.debug_log.append("⚠️ No employee file path provided")
+        # Attempt to load employee headcount for mapping
+        headcount_path = os.path.join(data_dir, HEADCOUNT_FILENAME)
+        # Fallback: look for any file with 'Headcount' in name if default missing
+        if not os.path.exists(headcount_path):
+             candidates = glob.glob(os.path.join(data_dir, "*Headcount*.csv"))
+             if candidates: headcount_path = candidates[0]
+
+        self._load_employee_mapping(headcount_path)
 
     def _load_employee_mapping(self, filepath):
-        try:
+        if os.path.exists(filepath):
             try:
-                df = pd.read_csv(filepath, encoding='utf-8-sig')
-            except:
-                df = pd.read_csv(filepath, encoding='latin1')
-
-            df.columns = [c.strip() for c in df.columns]
-            
-            email_col = next((c for c in df.columns if 'email' in c.lower()), None)
-            func_col = next((c for c in df.columns if 'function' in c.lower()), None)
-            if not func_col:
-                 func_col = next((c for c in df.columns if 'department' in c.lower()), None)
-
-            if not email_col or not func_col:
-                self.debug_log.append(f"❌ Column Missing in Emp File. Found: {df.columns.tolist()}")
-                return
-
-            df[email_col] = df[email_col].astype(str).str.lower().str.strip()
-            df[func_col] = df[func_col].astype(str).str.strip()
-            
-            self.employee_map = dict(zip(df[email_col], df[func_col]))
-            self.debug_log.append(f"✅ Mapped {len(self.employee_map)} employees.")
-            
-        except Exception as e:
-            self.debug_log.append(f"❌ Error processing employee file: {str(e)}")
-
-    def _get_empty_schema(self):
-        return pd.DataFrame(columns=['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count'])
-
-    def process_blueflame(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
-        # Identify date columns (e.g., '25-Apr')
-        date_cols = [c for c in df.columns if re.match(r'\d{2}-[A-Z][a-z]{2}', c)]
-        
-        if not date_cols:
-            return self._get_empty_schema()
-
-        melted = df.melt(id_vars=['User ID'], value_vars=date_cols, var_name='Date_Str', value_name='Count')
-        melted = melted.dropna(subset=['Count'])
-        melted['Count'] = pd.to_numeric(melted['Count'], errors='coerce').fillna(0)
-        melted = melted[melted['Count'] > 0]
-        melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%y-%b', errors='coerce')
-        
-        melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
-        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
-        melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
-        
-        melted['Tool'] = 'BlueFlame'
-        # --- UPDATED LABEL ---
-        melted['Feature'] = 'BlueFlame Messages' 
-        
-        return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
-
-    def process_openai(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
-        records = []
-        
-        # --- UPDATED MAPPING (Original Names) ---
-        feature_mapping = {
-            'messages': 'ChatGPT Messages',      # Main usage
-            'tool_messages': 'Tool Messages',    # Original csv header name
-            'gpt_messages': 'GPT Messages',      # Original csv header name
-            'project_messages': 'Project Messages' # Original csv header name
-        }
-        
-        df.columns = [c.lower() for c in df.columns]
-        
-        for _, row in df.iterrows():
-            email = str(row.get('email', '')).lower().strip()
-            if not email or email == 'nan': continue
-            
-            try:
-                date = pd.to_datetime(row.get('period_start'))
-            except:
-                continue
+                df = pd.read_csv(filepath)
+                # Normalize columns
+                df.columns = [c.lower() for c in df.columns]
                 
-            name = row.get('name', email.split('@')[0])
-            dept = self.employee_map.get(email, 'Unassigned')
-            
-            for col, feature_name in feature_mapping.items():
-                count = pd.to_numeric(row.get(col, 0), errors='coerce')
-                if count > 0:
-                    records.append({
-                        'Date': date,
-                        'Email': email,
-                        'Name': name,
-                        'Department': dept,
-                        'Tool': 'ChatGPT',
-                        'Feature': feature_name,
-                        'Count': count
-                    })
-        
-        if not records:
-            return self._get_empty_schema()
-            
-        return pd.DataFrame(records)
+                # Find Email and Department columns
+                email_col = next((c for c in df.columns if 'email' in c), None)
+                dept_col = next((c for c in df.columns if 'function' in c or 'department' in c), None)
+                
+                if email_col and dept_col:
+                    df[email_col] = df[email_col].astype(str).str.lower().str.strip()
+                    self.employee_map = dict(zip(df[email_col], df[dept_col]))
+                else:
+                    self.debug_log.append(f"⚠️ Columns missing in Headcount. Found: {df.columns}")
+            except Exception as e:
+                self.debug_log.append(f"❌ Error loading headcount: {e}")
 
-    def get_unified_data(self, bf_paths=None, openai_paths=None):
-        dfs = []
-        
-        def read_csv_safe(path):
+    def process_blueflame(self, file_pattern="blueflame*.csv"):
+        """
+        Reads BlueFlame files which usually have dates as columns (pivoted).
+        """
+        files = glob.glob(os.path.join(self.data_dir, file_pattern))
+        all_data = []
+
+        for f in files:
             try:
-                return pd.read_csv(path, encoding='utf-8-sig'), os.path.basename(path)
-            except:
-                return pd.read_csv(path, encoding='latin1'), os.path.basename(path)
+                df = pd.read_csv(f)
+                # Identify date columns (usually like '25-Apr')
+                # We assume non-date columns are 'User ID', 'User Name', etc.
+                id_vars = [c for c in df.columns if not any(char.isdigit() for char in c) or 'User' in c or 'ID' in c]
+                date_vars = [c for c in df.columns if c not in id_vars]
 
-        if bf_paths:
-            for f in bf_paths:
-                try:
-                    df, fname = read_csv_safe(f)
-                    dfs.append(self.process_blueflame(df, fname))
-                except Exception as e:
-                    self.debug_log.append(f"Error processing BF {os.path.basename(f)}: {e}")
+                if not date_vars: continue
 
-        if openai_paths:
-            for f in openai_paths:
-                try:
-                    df, fname = read_csv_safe(f)
-                    dfs.append(self.process_openai(df, fname))
-                except Exception as e:
-                    self.debug_log.append(f"Error processing OpenAI {os.path.basename(f)}: {e}")
-             
-        if not dfs: 
-            return self._get_empty_schema()
-            
-        result = pd.concat(dfs, ignore_index=True)
+                # Unpivot
+                melted = df.melt(id_vars=id_vars, value_vars=date_vars, var_name='Date_Str', value_name='Count')
+                
+                # Clean
+                melted['Count'] = pd.to_numeric(melted['Count'], errors='coerce').fillna(0)
+                melted = melted[melted['Count'] > 0]
+                
+                # Parse Date
+                melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%d-%b', errors='coerce')
+                # Fallback for year assignment (assume current year or logic)
+                # If needed, assume 2024/2025. For now, let pandas guess or default.
+                melted['Date'] = melted['Date'].apply(lambda x: x.replace(year=2025) if pd.notnull(x) else x)
+
+                # Map User
+                user_col = next((c for c in id_vars if 'User ID' in c or 'Email' in c), id_vars[0])
+                melted['Email'] = melted[user_col].astype(str).str.lower().str.strip()
+                melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
+                melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
+                melted['Tool'] = 'BlueFlame'
+                melted['Feature'] = 'BlueFlame Messages'
+
+                all_data.append(melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']])
+            except Exception as e:
+                self.debug_log.append(f"Error processing BF file {f}: {e}")
+
+        return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+
+    def process_openai(self, file_pattern="Openai*.csv"):
+        """
+        Reads OpenAI export files.
+        """
+        files = glob.glob(os.path.join(self.data_dir, file_pattern))
+        all_data = []
+
+        for f in files:
+            try:
+                df = pd.read_csv(f)
+                # Standardize headers
+                df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+                
+                if 'period_start' not in df.columns: continue
+
+                df['Date'] = pd.to_datetime(df['period_start'])
+                df['Email'] = df['email'].astype(str).str.lower().str.strip()
+                df['Name'] = df['name'].fillna(df['Email'].apply(lambda x: x.split('@')[0]))
+                df['Department'] = df['Email'].map(self.employee_map).fillna('Unassigned')
+                df['Tool'] = 'ChatGPT'
+
+                # Unpivot Metrics
+                metrics = {
+                    'messages': 'ChatGPT Messages',
+                    'tool_messages': 'Tool Messages',
+                    'gpt_messages': 'GPT Messages', # Custom GPTs
+                    'project_messages': 'Project Messages'
+                }
+
+                for col, feature_name in metrics.items():
+                    if col in df.columns:
+                        temp = df[df[col] > 0].copy()
+                        temp['Feature'] = feature_name
+                        temp['Count'] = temp[col]
+                        all_data.append(temp[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']])
+
+            except Exception as e:
+                self.debug_log.append(f"Error processing OpenAI file {f}: {e}")
+
+        return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+
+    def get_unified_data(self):
+        df_bf = self.process_blueflame()
+        df_openai = self.process_openai()
         
-        if 'Feature' not in result.columns:
-             result['Feature'] = 'Unknown'
-             
-        return result
+        unified = pd.concat([df_bf, df_openai], ignore_index=True)
+        
+        if unified.empty:
+            return pd.DataFrame(columns=['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count'])
+            
+        return unified
+
+# --- GLOBAL LOADER FUNCTION ---
+# This function is imported by Home.py and all pages
+@st.cache_data(ttl=3600)
+def load_and_process_data():
+    processor = DataProcessor()
+    df = processor.get_unified_data()
+    
+    # Basic validation
+    if df.empty:
+        return df, 0, 0
+        
+    total_users = df['Email'].nunique()
+    total_vol = df['Count'].sum()
+    
+    return df, total_users, total_vol
