@@ -1,6 +1,15 @@
+import sys
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+
+# --- PATH FIX: FORCE PYTHON TO SEE ROOT FOLDER ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.append(root_dir)
+# -------------------------------------------------
+
 from src.data_processor import load_and_process_data
 
 st.set_page_config(page_title="GenAI App Store", page_icon="🤖", layout="wide")
@@ -29,7 +38,6 @@ if agent_df.empty:
 
 # --- 1. High Level Stats ---
 bf_vol = df[df['Tool'] == 'BlueFlame']['Count'].sum()
-# Only count explicit GPT Messages, not general chat
 gpt_vol = df[df['Feature'] == 'GPT Messages']['Count'].sum()
 total_vol = df['Count'].sum()
 
