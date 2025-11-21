@@ -1,5 +1,14 @@
+import sys
+import os
 import streamlit as st
 import pandas as pd
+
+# --- PATH FIX: FORCE PYTHON TO SEE ROOT FOLDER ---
+# This ensures imports work regardless of CWD
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+# -------------------------------------------------
+
 from src.data_processor import load_and_process_data
 from components.cards import create_kpi_card
 
