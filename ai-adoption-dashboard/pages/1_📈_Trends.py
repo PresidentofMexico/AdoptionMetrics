@@ -1,7 +1,17 @@
+import sys
+import os
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+
+# --- PATH FIX: FORCE PYTHON TO SEE ROOT FOLDER ---
+# Use '..' to go up one level from 'pages/' to root
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.append(root_dir)
+# -------------------------------------------------
+
 from src.data_processor import load_and_process_data
 from src.metrics import MetricsEngine
 
@@ -32,7 +42,6 @@ ani_df = df.groupby([pd.Grouper(key='Date', freq='M'), 'Department']).agg(
 ani_df['Date_Str'] = ani_df['Date'].dt.strftime('%Y-%m')
 ani_df = ani_df.sort_values('Date')
 
-# Calculate limits
 max_users = ani_df['Active_Users'].max() * 1.1 if not ani_df.empty else 10
 max_vol = ani_df['Monthly_Volume'].max() * 1.1 if not ani_df.empty else 100
 
