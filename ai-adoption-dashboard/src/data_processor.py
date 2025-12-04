@@ -3,6 +3,7 @@ import re
 import os
 import glob
 import streamlit as st
+import datetime
 from src.config import HEADCOUNT_FILENAME, CHATGPT_EXPORT_PATTERN, BLUEFLAME_EXPORT_PATTERN
 
 class DataProcessor:
@@ -63,7 +64,18 @@ class DataProcessor:
         melted = melted.dropna(subset=['Count'])
         melted['Count'] = pd.to_numeric(melted['Count'], errors='coerce').fillna(0)
         melted = melted[melted['Count'] > 0]
-        melted['Date'] = pd.to_datetime(melted['Date_Str'], format='%y-%b', errors='coerce')
+        
+        # --- FIX: Date Parsing Logic ---
+        # Previous logic: format='%y-%b' parsed "25-Oct" as Year 2025, Month Oct (Day=1).
+        # New Logic: Treat "25" as Day, "Oct" as Month, append Year from filename or current year.
+        
+        # 1. Try to find year in filename (e.g., "October2025")
+        year_match = re.search(r'20\d{2}', filename)
+        year = year_match.group(0) if year_match else str(datetime.datetime.now().year)
+        
+        # 2. Append year and parse as Day-Month-Year
+        # "25-Oct" + "-2025" -> "25-Oct-2025"
+        melted['Date'] = pd.to_datetime(melted['Date_Str'] + f"-{year}", format='%d-%b-%Y', errors='coerce')
         
         melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
         melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
@@ -79,13 +91,6 @@ class DataProcessor:
     def process_openai(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
         records = []
         
-        feature_mapping = {
-            'messages': 'ChatGPT Messages',      
-            'tool_messages': 'Tool Messages',    
-            'gpt_messages': 'GPT Messages',      
-            'project_messages': 'Project Messages' 
-        }
-        
         df.columns = [c.lower() for c in df.columns]
         
         for _, row in df.iterrows():
@@ -98,23 +103,40 @@ class DataProcessor:
                 continue
                 
             # --- FIX: Enforce Consistent Naming ---
-            # Do NOT use the 'name' column from CSV to avoid "John Doe" vs "Doe, John" conflicts.
-            # We strictly derive name from email to match BlueFlame logic.
             name = email.split('@')[0].replace('.', ' ').title()
-            
             dept = self.employee_map.get(email, 'Unassigned')
             
-            for col, feature_name in feature_mapping.items():
-                count = pd.to_numeric(row.get(col, 0), errors='coerce')
+            # --- FIX: Avoid Double Counting ---
+            # 'messages' is typically the Total. 
+            # 'tool_messages', 'gpt_messages', etc. are subsets.
+            # We calculate "Standard Chat" by subtracting the subsets from the total.
+            
+            total_msgs = pd.to_numeric(row.get('messages', 0), errors='coerce')
+            tool_msgs = pd.to_numeric(row.get('tool_messages', 0), errors='coerce')
+            gpt_msgs = pd.to_numeric(row.get('gpt_messages', 0), errors='coerce')
+            project_msgs = pd.to_numeric(row.get('project_messages', 0), errors='coerce')
+            
+            # Sub-features to track explicitly
+            sub_features = {
+                'Tool Messages': tool_msgs,
+                'GPT Messages': gpt_msgs,
+                'Project Messages': project_msgs
+            }
+            
+            # Calculate Standard Chat (The Remainder)
+            standard_chat_count = total_msgs - (tool_msgs + gpt_msgs + project_msgs)
+            if standard_chat_count > 0:
+                records.append({
+                    'Date': date, 'Email': email, 'Name': name, 'Department': dept,
+                    'Tool': 'ChatGPT', 'Feature': 'Standard Chat', 'Count': standard_chat_count
+                })
+                
+            # Add specific sub-features
+            for feature_name, count in sub_features.items():
                 if count > 0:
                     records.append({
-                        'Date': date,
-                        'Email': email,
-                        'Name': name,
-                        'Department': dept,
-                        'Tool': 'ChatGPT',
-                        'Feature': feature_name,
-                        'Count': count
+                        'Date': date, 'Email': email, 'Name': name, 'Department': dept,
+                        'Tool': 'ChatGPT', 'Feature': feature_name, 'Count': count
                     })
         
         if not records:
