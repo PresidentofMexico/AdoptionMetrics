@@ -54,13 +54,27 @@ class DataProcessor:
         return pd.DataFrame(columns=['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count'])
 
     def process_blueflame(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
-        # Identify date columns (e.g., '25-Apr')
-        date_cols = [c for c in df.columns if re.match(r'\d{2}-[A-Z][a-z]{2}', c)]
+        # Clean columns to remove invisible whitespace
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # Identify date columns (e.g., '25-Apr' or '1-Oct')
+        # Regex updated to handle 1 or 2 digits: \d{1,2}
+        date_cols = [c for c in df.columns if re.match(r'^\d{1,2}-[A-Z][a-z]{2}', c)]
         
         if not date_cols:
+            self.debug_log.append(f"⚠️ No date columns found in BF file: {filename}")
             return self._get_empty_schema()
 
-        melted = df.melt(id_vars=['User ID'], value_vars=date_cols, var_name='Date_Str', value_name='Count')
+        # Identify User Column (flexible matching)
+        user_col = next((c for c in df.columns if 'user' in c.lower() and 'id' in c.lower()), None)
+        if not user_col:
+             # Fallback: try finding 'Email'
+             user_col = next((c for c in df.columns if 'email' in c.lower()), None)
+        
+        if not user_col:
+            return self._get_empty_schema()
+
+        melted = df.melt(id_vars=[user_col], value_vars=date_cols, var_name='Date_Str', value_name='Count')
         melted = melted.dropna(subset=['Count'])
         melted['Count'] = pd.to_numeric(melted['Count'], errors='coerce').fillna(0)
         melted = melted[melted['Count'] > 0]
@@ -70,14 +84,23 @@ class DataProcessor:
         year_match = re.search(r'20\d{2}', filename)
         year = year_match.group(0) if year_match else str(datetime.datetime.now().year)
         
-        # 2. Append year and parse as Day-Month-Year
+        # 2. Append year and parse
         melted['Date'] = pd.to_datetime(melted['Date_Str'].astype(str).str.strip() + f"-{year}", format='%d-%b-%Y', errors='coerce')
         
-        melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
+        melted['Email'] = melted[user_col].astype(str).str.lower().str.strip()
         
-        # --- FIX: Exclude "Total" rows and non-email rows ---
-        melted = melted[melted['Email'].str.contains('@', na=False)]
+        # --- FIX: STRICT FILTERS for "Total" rows ---
+        # 1. Drop rows where Email is just "nan" or empty
+        melted = melted[melted['Email'] != 'nan']
+        melted = melted[melted['Email'] != '']
         
+        # 2. Drop rows that contain "total", "sum" in the ID
+        blacklist = ['total', 'sum', 'average', 'count']
+        melted = melted[~melted['Email'].str.contains('|'.join(blacklist), case=False, na=False)]
+        
+        # 3. Require a valid email structure (contains @ and .)
+        melted = melted[melted['Email'].str.match(r'^[^@]+@[^@]+\.[^@]+')]
+
         melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
         
@@ -85,7 +108,7 @@ class DataProcessor:
         melted['Feature'] = 'BlueFlame Messages' 
         
         # --- FIX: Aggregate daily counts ---
-        # If the CSV has multiple rows per user (e.g. broken down by something else), sum them up.
+        # Sums up if duplicates exist in the source file
         melted = melted.groupby(['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature'], as_index=False)['Count'].sum()
         
         return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
@@ -93,15 +116,15 @@ class DataProcessor:
     def process_openai(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
         records = []
         
-        df.columns = [c.lower() for c in df.columns]
+        df.columns = [c.lower().strip() for c in df.columns]
         
         for _, row in df.iterrows():
             email = str(row.get('email', '')).lower().strip()
             
             # --- FIX: Strict Email Validation ---
-            # Drops "Total", "Grand Total", and empty rows to prevent double counting
             if not email or '@' not in email: continue
-            
+            if 'total' in email.lower(): continue
+
             try:
                 date = pd.to_datetime(row.get('period_start'))
             except:
@@ -111,11 +134,13 @@ class DataProcessor:
             dept = self.employee_map.get(email, 'Unassigned')
             
             # --- FIX: Avoid Double Counting ---
+            # Use 'messages' as Total.
             total_msgs = pd.to_numeric(row.get('messages', 0), errors='coerce')
             tool_msgs = pd.to_numeric(row.get('tool_messages', 0), errors='coerce')
             gpt_msgs = pd.to_numeric(row.get('gpt_messages', 0), errors='coerce')
             project_msgs = pd.to_numeric(row.get('project_messages', 0), errors='coerce')
             
+            # Sub-features
             sub_features = {
                 'Tool Messages': tool_msgs,
                 'GPT Messages': gpt_msgs,
@@ -123,10 +148,13 @@ class DataProcessor:
             }
             
             # Calculate Standard Chat (The Remainder)
-            standard_chat_count = total_msgs - (tool_msgs + gpt_msgs + project_msgs)
+            # If sub-features are NaN, they are treated as 0 above
+            sub_total = tool_msgs + gpt_msgs + project_msgs
+            standard_chat_count = total_msgs - sub_total
             
-            # Guard against negative numbers if CSV data is inconsistent
-            if standard_chat_count < 0: standard_chat_count = 0
+            # Safety clamp
+            if standard_chat_count < 0: 
+                standard_chat_count = 0
             
             if standard_chat_count > 0:
                 records.append({
@@ -177,6 +205,7 @@ class DataProcessor:
         result = pd.concat(dfs, ignore_index=True)
         
         # --- FIX: STRICT DEDUPLICATION ---
+        # Keeps only the first occurrence of valid data points
         initial_count = len(result)
         result = result.drop_duplicates(subset=['Date', 'Email', 'Tool', 'Feature'])
         final_count = len(result)
