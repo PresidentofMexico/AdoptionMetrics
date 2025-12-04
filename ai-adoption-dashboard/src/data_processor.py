@@ -36,8 +36,12 @@ class DataProcessor:
                 self.debug_log.append(f"❌ Column Missing in Emp File. Found: {df.columns.tolist()}")
                 return
 
+            # Normalize emails
             df[email_col] = df[email_col].astype(str).str.lower().str.strip()
             df[func_col] = df[func_col].astype(str).str.strip()
+            
+            # --- FIX: Remove duplicates in headcount file (Keep last entry) ---
+            df = df.drop_duplicates(subset=[email_col], keep='last')
             
             self.employee_map = dict(zip(df[email_col], df[func_col]))
             self.debug_log.append(f"✅ Mapped {len(self.employee_map)} employees.")
@@ -63,6 +67,8 @@ class DataProcessor:
         
         melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
         melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
+        
+        # --- FIX: Standardized Name Generation ---
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
         
         melted['Tool'] = 'BlueFlame'
@@ -91,7 +97,11 @@ class DataProcessor:
             except:
                 continue
                 
-            name = row.get('name', email.split('@')[0])
+            # --- FIX: Enforce Consistent Naming ---
+            # Do NOT use the 'name' column from CSV to avoid "John Doe" vs "Doe, John" conflicts.
+            # We strictly derive name from email to match BlueFlame logic.
+            name = email.split('@')[0].replace('.', ' ').title()
+            
             dept = self.employee_map.get(email, 'Unassigned')
             
             for col, feature_name in feature_mapping.items():
@@ -142,12 +152,21 @@ class DataProcessor:
             
         result = pd.concat(dfs, ignore_index=True)
         
+        # --- FIX: STRICT DEDUPLICATION ---
+        # Ensure we don't double count if files overlap (e.g., March report + Q1 report)
+        initial_count = len(result)
+        result = result.drop_duplicates(subset=['Date', 'Email', 'Tool', 'Feature'])
+        final_count = len(result)
+        
+        if initial_count != final_count:
+            self.debug_log.append(f"⚠️ Removed {initial_count - final_count} duplicate records.")
+        
         if 'Feature' not in result.columns:
              result['Feature'] = 'Unknown'
              
         return result
 
-# --- Unified Data Loader (Moved from Home.py to fix circular imports) ---
+# --- Unified Data Loader ---
 @st.cache_data(show_spinner="Processing Data...")
 def load_data():
     """
