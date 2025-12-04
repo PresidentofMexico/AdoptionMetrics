@@ -66,25 +66,27 @@ class DataProcessor:
         melted = melted[melted['Count'] > 0]
         
         # --- FIX: Date Parsing Logic ---
-        # Previous logic: format='%y-%b' parsed "25-Oct" as Year 2025, Month Oct (Day=1).
-        # New Logic: Treat "25" as Day, "Oct" as Month, append Year from filename or current year.
-        
         # 1. Try to find year in filename (e.g., "October2025")
         year_match = re.search(r'20\d{2}', filename)
         year = year_match.group(0) if year_match else str(datetime.datetime.now().year)
         
         # 2. Append year and parse as Day-Month-Year
-        # "25-Oct" + "-2025" -> "25-Oct-2025"
-        melted['Date'] = pd.to_datetime(melted['Date_Str'] + f"-{year}", format='%d-%b-%Y', errors='coerce')
+        melted['Date'] = pd.to_datetime(melted['Date_Str'].astype(str).str.strip() + f"-{year}", format='%d-%b-%Y', errors='coerce')
         
         melted['Email'] = melted['User ID'].astype(str).str.lower().str.strip()
-        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
         
-        # --- FIX: Standardized Name Generation ---
+        # --- FIX: Exclude "Total" rows and non-email rows ---
+        melted = melted[melted['Email'].str.contains('@', na=False)]
+        
+        melted['Department'] = melted['Email'].map(self.employee_map).fillna('Unassigned')
         melted['Name'] = melted['Email'].apply(lambda x: x.split('@')[0].replace('.', ' ').title())
         
         melted['Tool'] = 'BlueFlame'
         melted['Feature'] = 'BlueFlame Messages' 
+        
+        # --- FIX: Aggregate daily counts ---
+        # If the CSV has multiple rows per user (e.g. broken down by something else), sum them up.
+        melted = melted.groupby(['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature'], as_index=False)['Count'].sum()
         
         return melted[['Date', 'Email', 'Name', 'Department', 'Tool', 'Feature', 'Count']]
 
@@ -95,28 +97,25 @@ class DataProcessor:
         
         for _, row in df.iterrows():
             email = str(row.get('email', '')).lower().strip()
-            if not email or email == 'nan': continue
+            
+            # --- FIX: Strict Email Validation ---
+            # Drops "Total", "Grand Total", and empty rows to prevent double counting
+            if not email or '@' not in email: continue
             
             try:
                 date = pd.to_datetime(row.get('period_start'))
             except:
                 continue
                 
-            # --- FIX: Enforce Consistent Naming ---
             name = email.split('@')[0].replace('.', ' ').title()
             dept = self.employee_map.get(email, 'Unassigned')
             
             # --- FIX: Avoid Double Counting ---
-            # 'messages' is typically the Total. 
-            # 'tool_messages', 'gpt_messages', etc. are subsets.
-            # We calculate "Standard Chat" by subtracting the subsets from the total.
-            
             total_msgs = pd.to_numeric(row.get('messages', 0), errors='coerce')
             tool_msgs = pd.to_numeric(row.get('tool_messages', 0), errors='coerce')
             gpt_msgs = pd.to_numeric(row.get('gpt_messages', 0), errors='coerce')
             project_msgs = pd.to_numeric(row.get('project_messages', 0), errors='coerce')
             
-            # Sub-features to track explicitly
             sub_features = {
                 'Tool Messages': tool_msgs,
                 'GPT Messages': gpt_msgs,
@@ -125,13 +124,16 @@ class DataProcessor:
             
             # Calculate Standard Chat (The Remainder)
             standard_chat_count = total_msgs - (tool_msgs + gpt_msgs + project_msgs)
+            
+            # Guard against negative numbers if CSV data is inconsistent
+            if standard_chat_count < 0: standard_chat_count = 0
+            
             if standard_chat_count > 0:
                 records.append({
                     'Date': date, 'Email': email, 'Name': name, 'Department': dept,
                     'Tool': 'ChatGPT', 'Feature': 'Standard Chat', 'Count': standard_chat_count
                 })
                 
-            # Add specific sub-features
             for feature_name, count in sub_features.items():
                 if count > 0:
                     records.append({
@@ -175,7 +177,6 @@ class DataProcessor:
         result = pd.concat(dfs, ignore_index=True)
         
         # --- FIX: STRICT DEDUPLICATION ---
-        # Ensure we don't double count if files overlap (e.g., March report + Q1 report)
         initial_count = len(result)
         result = result.drop_duplicates(subset=['Date', 'Email', 'Tool', 'Feature'])
         final_count = len(result)
