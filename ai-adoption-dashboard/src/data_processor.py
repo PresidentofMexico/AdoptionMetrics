@@ -148,9 +148,18 @@ class DataProcessor:
             }
             
             # Calculate Standard Chat (The Remainder)
-            # If sub-features are NaN, they are treated as 0 above
             sub_total = tool_msgs + gpt_msgs + project_msgs
-            standard_chat_count = total_msgs - sub_total
+            
+            # LOGIC CHECK: Is 'messages' inclusive or exclusive?
+            # Standard Assumption: messages is Total.
+            # Safety Check: If Total < Sub-parts, then 'messages' must be exclusive (Standard Chat only).
+            
+            if total_msgs < sub_total:
+                # Case: 'messages' column represents ONLY Standard Chat
+                standard_chat_count = total_msgs
+            else:
+                # Case: 'messages' column represents Total (Subtract parts to get Standard Chat)
+                standard_chat_count = total_msgs - sub_total
             
             # Safety clamp
             if standard_chat_count < 0: 
@@ -242,14 +251,32 @@ def load_data():
             found = glob.glob(os.path.join(folder, f"{HEADCOUNT_FILENAME}*"))
             if found: emp_path = found[0]
     
-        # Find Usage Files using Config Patterns
+        # Find Usage Files - Aggressive Fallback
+        # 1. Try Config Patterns
         for pattern in BLUEFLAME_EXPORT_PATTERN:
             bf_files.extend(glob.glob(os.path.join(folder, pattern)))
-            
         for pattern in CHATGPT_EXPORT_PATTERN:
             openai_files.extend(glob.glob(os.path.join(folder, pattern)))
+            
+        # 2. Fallback: Search for any file with "blueflame" or "openai" in name if lists are empty
+        if not bf_files:
+             bf_files.extend(glob.glob(os.path.join(folder, "*blueflame*.csv")))
+             bf_files.extend(glob.glob(os.path.join(folder, "*BlueFlame*.csv")))
+             
+        if not openai_files:
+             openai_files.extend(glob.glob(os.path.join(folder, "*openai*.csv")))
+             openai_files.extend(glob.glob(os.path.join(folder, "*OpenAI*.csv")))
     
+    # Deduplicate file lists
+    bf_files = list(set(bf_files))
+    openai_files = list(set(openai_files))
+
     processor = DataProcessor(emp_path)
     # Remove duplicates
-    df = processor.get_unified_data(bf_paths=list(set(bf_files)), openai_paths=list(set(openai_files)))
+    df = processor.get_unified_data(bf_paths=bf_files, openai_paths=openai_files)
+    
+    # Add File Detection Log
+    processor.debug_log.append(f"📂 Found {len(bf_files)} BlueFlame files")
+    processor.debug_log.append(f"📂 Found {len(openai_files)} OpenAI files")
+    
     return df, emp_path, processor.debug_log
